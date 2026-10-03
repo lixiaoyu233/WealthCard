@@ -53,8 +53,8 @@ export function useSettings(portfolio: Portfolio, applyPortfolio: (p: Portfolio)
     setSettings((s) => ({ ...s, fund: { ...s.fund, ...patch } }))
   }, [])
 
-  const setTrendsEnabled = useCallback((trendsEnabled: boolean) => {
-    setSettings((s) => ({ ...s, trendsEnabled }))
+  const setTrends = useCallback((patch: Partial<AppSettings['trends']>) => {
+    setSettings((s) => ({ ...s, trends: { ...s.trends, ...patch } }))
   }, [])
 
   const setFixed = useCallback((patch: Partial<FixedSalary>) => {
@@ -148,7 +148,7 @@ export function useSettings(portfolio: Portfolio, applyPortfolio: (p: Portfolio)
     dismissAutoApplied: () => setAutoApplied(null),
     setFundDefault,
     setFundingSource,
-    setTrendsEnabled,
+    setTrends,
     setFixed,
     upsertSalary,
     removeSalary,

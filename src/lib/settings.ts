@@ -6,6 +6,7 @@
  */
 
 import type { Portfolio } from '../types/asset'
+import type { TrendRange, TrendTab } from './netWorthHistory'
 
 export const SETTINGS_STORAGE_KEY = 'asset-card-wallet/settings/v1'
 
@@ -19,7 +20,9 @@ export interface FundingSource {
   itemName: string
 }
 
-/** 基金申购默认设置 */
+/** 走势可选指标 */
+
+/** 基金/股票申购默认设置 */
 export interface FundDefaults {
   /** 默认是否启用「从现有项目划拨」 */
   useFunding: boolean
@@ -50,11 +53,27 @@ export interface FixedSalary {
   target?: FundingSource
 }
 
+/** 走势面板外观配置 */
+export interface TrendsConfig {
+  /** 是否在首页显示走势面板 */
+  enabled: boolean
+  /** 面板里展示哪几个标签页（至少保留一个） */
+  metrics: TrendTab[]
+  /** 打开时的默认时间范围 */
+  range: TrendRange
+  /** 是否在点上显示数值 */
+  showLabels: boolean
+  /** 是否显示环比 */
+  showMom: boolean
+  /** 是否按涨跌着色 */
+  colorByTrend: boolean
+}
+
 export interface AppSettings {
   version: number
   fund: FundDefaults
-  /** 是否在首页显示走势面板（净资产/总资产/负债/薪资 四合一），默认关闭 */
-  trendsEnabled: boolean
+  /** 走势面板配置（在设置里选指标，卡片内不再选） */
+  trends: TrendsConfig
   salary: {
     /** 按月存档的薪资记录 */
     records: SalaryRecord[]
@@ -65,7 +84,14 @@ export interface AppSettings {
 export function createDefaultSettings(): AppSettings {
   return {
     version: 1,
-    trendsEnabled: false,
+    trends: {
+      enabled: false,
+      metrics: ['netWorth'],
+      range: '1y',
+      showLabels: true,
+      showMom: true,
+      colorByTrend: true,
+    },
     fund: { useFunding: false },
     salary: {
       records: [],
@@ -116,6 +142,36 @@ function normalizeSource(raw: unknown): FundingSource | undefined {
   }
 }
 
+const ALL_METRICS: TrendTab[] = ['netWorth', 'assets', 'liabilities', 'salary']
+const ALL_RANGES: TrendRange[] = ['6m', '1y', '3y', 'all']
+
+/** 走势配置：兼容 v1 的顶层开关与旧 showChart 字段 */
+function normalizeTrends(raw: Record<string, unknown>, salary: Record<string, unknown>): TrendsConfig {
+  const base = createDefaultSettings().trends
+  const t = isRecord(raw.trends) ? raw.trends : {}
+  const legacyEnabled = raw.trendsEnabled === true || salary.showChart === true
+
+  const metricsRaw = Array.isArray(t.metrics) ? (t.metrics as unknown[]) : null
+  const metrics = metricsRaw
+    ? metricsRaw.filter((m): m is TrendTab => typeof m === 'string' && ALL_METRICS.includes(m as TrendTab))
+    : // 旧数据：开关打开时曾经固定展示全部指标
+      legacyEnabled
+      ? ALL_METRICS
+      : base.metrics
+
+  const rangeRaw = typeof t.range === 'string' ? (t.range as TrendRange) : base.range
+
+  return {
+    enabled: typeof t.enabled === 'boolean' ? t.enabled : legacyEnabled,
+    // 至少保留一个指标，否则面板会空白
+    metrics: metrics.length > 0 ? metrics : ['netWorth'],
+    range: ALL_RANGES.includes(rangeRaw) ? rangeRaw : base.range,
+    showLabels: t.showLabels === undefined ? base.showLabels : t.showLabels === true,
+    showMom: t.showMom === undefined ? base.showMom : t.showMom === true,
+    colorByTrend: t.colorByTrend === undefined ? base.colorByTrend : t.colorByTrend === true,
+  }
+}
+
 /** 把任意来源的数据规范化为当前 Schema（脏数据不影响使用） */
 export function normalizeSettings(raw: unknown): AppSettings {
   const base = createDefaultSettings()
@@ -154,8 +210,9 @@ export function normalizeSettings(raw: unknown): AppSettings {
       useFunding: fund.useFunding === true,
       lastFundingSource: normalizeSource(fund.lastFundingSource),
     },
-    // 兼容旧数据：早期只有「薪资走势」开关，语义合并为走势面板开关
-    trendsEnabled: raw.trendsEnabled === true || salary.showChart === true,
+    // 兼容旧数据：v1 用顶层 trendsEnabled / salary.showChart 表示开关，
+    // 且当时面板固定展示全部四个指标
+    trends: normalizeTrends(raw, salary),
     salary: {
       records,
       fixed: {

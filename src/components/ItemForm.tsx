@@ -660,14 +660,14 @@ export default function ItemForm({
 
       {isFundKind ? numberField('costNav', costNav, setCostNav) : null}
 
-      {/* 资金划拨：只在新增基金持仓时提供 */}
+      {/* 资金划拨：新增基金或美股/港股持仓时都可选（编辑时不可改，避免对账混乱） */}
       {isFundKind && !editing ? (
         <div className="rounded-xl border border-line bg-s2 px-3.5 py-3">
           <label className="flex cursor-pointer items-center justify-between gap-3">
             <span>
               <span className="block text-[13px] text-ink1">从现有项目划拨</span>
               <span className="mt-0.5 block text-[11px] leading-relaxed text-ink4">
-                基金增加的同时，所选现金项目相应减少（净资产不变）
+                持仓增加的同时，所选现金项目相应减少（净资产不变）
               </span>
             </span>
             <input

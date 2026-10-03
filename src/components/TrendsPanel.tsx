@@ -37,8 +37,16 @@ const TAB_LABEL: Record<TrendTab, string> = {
 interface TrendsPanelProps {
   points: NetWorthPoint[]
   salaryRecords: SalaryRecord[]
-  /** 默认展示哪个指标 */
-  defaultTab?: TrendTab
+  /** 展示哪些标签页（在设置里选，卡片内不再选） */
+  metrics: TrendTab[]
+  /** 打开时的默认时间范围 */
+  defaultRange?: TrendRange
+  /** 是否在点上显示数值 */
+  showLabels?: boolean
+  /** 是否显示环比 */
+  showMom?: boolean
+  /** 是否按涨跌着色 */
+  colorByTrend?: boolean
 }
 
 /** 统一的图内数据形状 */
@@ -48,12 +56,23 @@ interface ChartRow {
   month?: string
 }
 
-export default function TrendsPanel({ points, salaryRecords, defaultTab = 'netWorth' }: TrendsPanelProps) {
-  const [tab, setTab] = useState<TrendTab>(defaultTab)
-  const [range, setRange] = useState<TrendRange>('1y')
+export default function TrendsPanel({
+  points,
+  salaryRecords,
+  metrics,
+  defaultRange = '1y',
+  showLabels = true,
+  showMom = true,
+  colorByTrend = true,
+}: TrendsPanelProps) {
+  /** 只展示设置里勾选的指标；设置变更时自动回落到第一个可用项 */
+  const visible = metrics.length > 0 ? metrics : (['netWorth'] as TrendTab[])
+  const [tab, setTab] = useState<TrendTab>(visible[0])
+  const [range, setRange] = useState<TrendRange>(defaultRange)
   const [active, setActive] = useState<ChartRow | null>(null)
 
-  const isSalary = tab === 'salary'
+  const currentTab = visible.includes(tab) ? tab : visible[0]
+  const isSalary = currentTab === 'salary'
 
   const rows: ChartRow[] = useMemo(() => {
     if (isSalary) {
@@ -62,10 +81,10 @@ export default function TrendsPanel({ points, salaryRecords, defaultTab = 'netWo
       const sliced = range === 'all' ? sorted : sorted.slice(-rangeMonths(range))
       return sliced.map((r) => ({ label: shortMonth(r.month), value: r.amount, month: r.month }))
     }
-    const metric = tab as TrendMetric
+    const metric = currentTab as TrendMetric
     const sliced = sliceByRange(points, range)
     return sliced.map((p) => ({ label: shortMonth(p.month), value: p[metric], month: p.month }))
-  }, [isSalary, salaryRecords, points, range, tab])
+  }, [isSalary, salaryRecords, points, range, currentTab])
 
   const stats = useMemo(() => {
     if (rows.length < 2) return null
@@ -89,7 +108,8 @@ export default function TrendsPanel({ points, salaryRecords, defaultTab = 'netWo
   // 点数少时用清晰度更高的面积图，点数多时用柱状更易读
   const useBar = rows.length <= 4
   const rising = (stats?.delta ?? 0) >= 0
-  const lineColor = rising ? 'var(--up)' : 'var(--down)'
+  // 关闭「按涨跌着色」时用中性色，避免颜色误导
+  const lineColor = colorByTrend ? (rising ? 'var(--up)' : 'var(--down)') : 'var(--chart-tick)'
 
   const viewPoint = useMemo(() => {
     if (!active?.month) return null
@@ -101,7 +121,7 @@ export default function TrendsPanel({ points, salaryRecords, defaultTab = 'netWo
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[13px] font-medium text-ink1">走势</p>
-          {stats ? (
+          {stats && showMom ? (
             <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[11px] text-ink4">
               <span>较上期</span>
               <span className={`tabular-nums ${stats.momDelta >= 0 ? 'tone-up' : 'tone-down'}`}>
@@ -115,7 +135,7 @@ export default function TrendsPanel({ points, salaryRecords, defaultTab = 'netWo
             </p>
           ) : (
             <p className="mt-0.5 text-[11px] text-ink4">
-              {isSalary ? '先在设置里记录每月薪资' : '再积累一个月就能看到变化'}
+              {stats ? `${TREND_RANGE_LABEL[range]}` : isSalary ? '先在设置里记录每月薪资' : '再积累一个月就能看到变化'}
             </p>
           )}
         </div>
@@ -134,7 +154,7 @@ export default function TrendsPanel({ points, salaryRecords, defaultTab = 'netWo
 
       {/* 指标切换 */}
       <div className="mt-3 flex gap-1 overflow-x-auto rounded-xl border border-line bg-s2 p-1">
-        {(Object.keys(TAB_LABEL) as TrendTab[]).map((key) => (
+        {visible.map((key) => (
           <button
             key={key}
             type="button"
@@ -144,7 +164,7 @@ export default function TrendsPanel({ points, salaryRecords, defaultTab = 'netWo
               setActive(null)
             }}
             className={`flex-1 whitespace-nowrap rounded-lg px-3 py-1.5 text-[12px] transition ${
-              tab === key ? 'bg-invert text-on-invert' : 'text-ink3 hover:text-ink1'
+              currentTab === key ? 'bg-invert text-on-invert' : 'text-ink3 hover:text-ink1'
             }`}
           >
             {TAB_LABEL[key]}
@@ -192,14 +212,20 @@ export default function TrendsPanel({ points, salaryRecords, defaultTab = 'netWo
                   onClick={(_, i) => setActive(rows[i] ?? null)}
                 >
                   {rows.map((_, i) => (
-                    <Cell key={i} fill={rising ? 'var(--up)' : 'var(--down)'} opacity={active && active.label !== rows[i].label ? 0.5 : 1} />
+                    <Cell
+                      key={i}
+                      fill={colorByTrend ? (rising ? 'var(--up)' : 'var(--down)') : 'var(--chart-tick)'}
+                      opacity={active && active.label !== rows[i].label ? 0.5 : 1}
+                    />
                   ))}
-                  <LabelList
-                    dataKey="value"
-                    position="top"
-                    formatter={(v: number) => formatCNY(v, 0)}
-                    style={{ fill: 'var(--ink3)', fontSize: 9 }}
-                  />
+                  {showLabels ? (
+                    <LabelList
+                      dataKey="value"
+                      position="top"
+                      formatter={(v: number) => formatCNY(v, 0)}
+                      style={{ fill: 'var(--ink3)', fontSize: 9 }}
+                    />
+                  ) : null}
                 </Bar>
               </BarChart>
             ) : (
@@ -244,12 +270,14 @@ export default function TrendsPanel({ points, salaryRecords, defaultTab = 'netWo
                   }}
                   activeDot={false}
                 />
-                <LabelList
-                  dataKey="value"
-                  position="top"
-                  formatter={(v: number) => formatCNY(v, 0)}
-                  style={{ fill: 'var(--ink3)', fontSize: 9 }}
-                />
+                {showLabels ? (
+                  <LabelList
+                    dataKey="value"
+                    position="top"
+                    formatter={(v: number) => formatCNY(v, 0)}
+                    style={{ fill: 'var(--ink3)', fontSize: 9 }}
+                  />
+                ) : null}
               </AreaChart>
             )}
           </ResponsiveContainer>

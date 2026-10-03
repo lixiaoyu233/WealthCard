@@ -283,6 +283,18 @@ function addMonths(month: string, delta: number): string {
 
 export type TrendMetric = 'netWorth' | 'assets' | 'liabilities'
 
+/** 面板上可切换的全部标签页（薪资与资产口径不同，但在同一个面板里展示） */
+export type TrendTab = TrendMetric | 'salary'
+
+export const ALL_TREND_TABS: TrendTab[] = ['netWorth', 'assets', 'liabilities', 'salary']
+
+export const TREND_TAB_LABEL: Record<TrendTab, string> = {
+  netWorth: '净资产',
+  assets: '总资产',
+  liabilities: '负债',
+  salary: '薪资',
+}
+
 export const TREND_METRIC_LABEL: Record<TrendMetric, string> = {
   netWorth: '净资产',
   assets: '总资产',

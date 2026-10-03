@@ -329,11 +329,16 @@ export default function App() {
         </div>
 
         {/* 走势面板（净资产 / 总资产 / 负债 / 薪资），在设置里开启后才显示 */}
-        {settingsState.settings.trendsEnabled ? (
+        {settingsState.settings.trends.enabled ? (
           <div className="mt-4">
             <TrendsPanel
               points={settingsState.snapshot.points}
               salaryRecords={settingsState.settings.salary.records}
+              metrics={settingsState.settings.trends.metrics}
+              defaultRange={settingsState.settings.trends.range}
+              showLabels={settingsState.settings.trends.showLabels}
+              showMom={settingsState.settings.trends.showMom}
+              colorByTrend={settingsState.settings.trends.colorByTrend}
             />
           </div>
         ) : null}
@@ -458,7 +463,7 @@ export default function App() {
         onClose={() => setSettingsSheetOpen(false)}
         onSetFundDefault={settingsState.setFundDefault}
         onSetFundingSource={settingsState.setFundingSource}
-        onSetTrendsEnabled={settingsState.setTrendsEnabled}
+        onSetTrends={settingsState.setTrends}
         onSetFixed={settingsState.setFixed}
         onUpsertSalary={(month, amount) => {
           settingsState.upsertSalary(month, amount)
