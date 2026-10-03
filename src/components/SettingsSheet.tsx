@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, BarChart3, Check, Landmark, LineChart, TrendingUp } from 'lucide-react'
+import { ArrowLeft, BarChart3, Check, Landmark, LineChart, Stethoscope, TrendingUp } from 'lucide-react'
 import type { Portfolio } from '../types/asset'
 import type { TrendRange, TrendTab } from '../lib/netWorthHistory'
 import { ALL_TREND_TABS, TREND_RANGE_LABEL, TREND_TAB_LABEL } from '../lib/netWorthHistory'
 import type { AppSettings, CashCandidate, FundingSource, TrendsConfig } from '../lib/settings'
 import { currentMonth, formatMonth, isPaydayReached } from '../lib/settings'
 import { formatCNY } from '../lib/format'
+import { collectDiagnostics, resolveSafeTopInset } from '../lib/safeArea'
 import Sheet from './Sheet'
 
 interface SettingsSheetProps {
@@ -24,12 +25,13 @@ interface SettingsSheetProps {
 }
 
 /** 设置的三级菜单：先进列表，再进具体页面 */
-type Page = 'menu' | 'fund' | 'salary' | 'trends'
+type Page = 'menu' | 'fund' | 'salary' | 'trends' | 'diagnostics'
 
 const PAGE_META: Record<Exclude<Page, 'menu'>, { title: string; subtitle: string }> = {
   fund: { title: '股票基金申购方式', subtitle: '买入时资金从哪里来' },
   salary: { title: '薪资', subtitle: '每月记录与固定发薪' },
   trends: { title: '走势图', subtitle: '开关与展示内容' },
+  diagnostics: { title: '诊断信息', subtitle: '排查显示问题用' },
 }
 
 /* ------------------------------------------------------------------ *
@@ -123,8 +125,10 @@ export default function SettingsSheet(props: SettingsSheetProps) {
         <FundPage {...props} />
       ) : page === 'salary' ? (
         <SalaryPage {...props} />
-      ) : (
+      ) : page === 'trends' ? (
         <TrendsPage {...props} />
+      ) : (
+        <DiagnosticsPage />
       )}
     </Sheet>
   )
@@ -158,6 +162,13 @@ function MenuPage({ settings, onGo }: { settings: AppSettings; onGo: (p: Page) =
       title: '走势图',
       desc: '是否显示，以及展示哪些内容',
       state: settings.trends.enabled ? `已开启 · ${settings.trends.metrics.length} 项` : '已关闭',
+    },
+    {
+      key: 'diagnostics',
+      icon: Stethoscope,
+      title: '诊断信息',
+      desc: '屏幕尺寸、安全区实测值等',
+      state: '查看',
     },
   ]
 
@@ -606,6 +617,80 @@ function TrendsPage({ settings, onSetTrends }: SettingsSheetProps) {
           「点按数据点看该月明细」和「区间统计」默认开启。
         </p>
       </div>
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ *
+ * 四、诊断信息（iOS 独立模式无法真机调试，靠它回报实际数值）
+ * ------------------------------------------------------------------ */
+
+function DiagnosticsPage() {
+  const [info, setInfo] = useState<Record<string, string | number | boolean>>({})
+  const [copied, setCopied] = useState(false)
+
+  const refresh = () => setInfo(collectDiagnostics())
+
+  useEffect(() => {
+    refresh()
+  }, [])
+
+  const text = Object.entries(info)
+    .map(([k, v]) => `${k}: ${typeof v === 'boolean' ? (v ? '是' : '否') : v}`)
+    .join('\n')
+
+  return (
+    <div className="space-y-4">
+      <p className="rounded-xl border border-line bg-s2 px-3.5 py-3 text-[11.5px] leading-relaxed text-ink4">
+        如果出现「顶部被状态栏遮住」或「顶部留白过宽」，把下面的信息发给我，我就能按你设备的实际数值校准，
+        而不用靠猜。
+      </p>
+
+      <dl className="divide-y divide-line overflow-hidden rounded-xl border border-line" data-testid="diagnostics">
+        {Object.entries(info).map(([k, v]) => (
+          <div key={k} className="flex items-start gap-3 bg-s2 px-3.5 py-2.5">
+            <dt className="w-[132px] shrink-0 text-[11.5px] text-ink4">{k}</dt>
+            <dd className="min-w-0 flex-1 break-all text-[11.5px] tabular-nums text-ink2">
+              {typeof v === 'boolean' ? (v ? '是' : '否') : v}
+            </dd>
+          </div>
+        ))}
+      </dl>
+
+      <div className="flex gap-2">
+        <button
+          type="button"
+          data-testid="diagnostics-refresh"
+          className="btn-ghost flex-1"
+          onClick={() => {
+            // 重新实测一次（模拟「下拉一下恢复」后的状态）
+            resolveSafeTopInset()
+            refresh()
+          }}
+        >
+          重新实测
+        </button>
+        <button
+          type="button"
+          data-testid="diagnostics-copy"
+          className="btn-primary flex-1"
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(text)
+              setCopied(true)
+              window.setTimeout(() => setCopied(false), 1600)
+            } catch {
+              setCopied(false)
+            }
+          }}
+        >
+          {copied ? '已复制' : '复制信息'}
+        </button>
+      </div>
+
+      <pre className="overflow-x-auto rounded-xl border border-line bg-s2 p-3 text-[10.5px] leading-relaxed text-ink3">
+        {text}
+      </pre>
     </div>
   )
 }

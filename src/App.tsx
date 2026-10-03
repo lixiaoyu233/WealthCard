@@ -20,6 +20,7 @@ import { useTheme } from './hooks/useTheme'
 import { useSettings } from './hooks/useSettings'
 import { formatMonth } from './lib/settings'
 import { advanceSnapshot } from './lib/netWorthHistory'
+import { resolveSafeTopInset } from './lib/safeArea'
 import { categoryTotal } from './lib/calc'
 import { statusLine } from './lib/rebalance'
 
@@ -109,6 +110,17 @@ export default function App() {
     for (const c of portfolio.categories) out[c.id] = categoryTotal(c, fx.rates)
     return out
   }, [portfolio, fx.rates])
+
+  /**
+   * 顶部安全区：首屏前内联脚本已设过一次，这里在挂载后按实际视口再校准一次。
+   * 目的是覆盖「内联脚本读到 0、但实际需要避让」的情况。
+   */
+  useEffect(() => {
+    resolveSafeTopInset()
+    const onResize = () => resolveSafeTopInset()
+    window.addEventListener('orientationchange', onResize)
+    return () => window.removeEventListener('orientationchange', onResize)
+  }, [])
 
   // 固定薪资自动入账提示（只提示一次）
   useEffect(() => {

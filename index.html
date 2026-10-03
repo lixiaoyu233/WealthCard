@@ -22,33 +22,57 @@
     <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <!--
-      状态栏使用 black 而不是 black-translucent。
-      black-translucent 会让网页延伸到状态栏下方，必须靠 env(safe-area-inset-top) 自己补内边距；
-      而 iOS 独立窗口模式在这方面有个已知问题：初次打开时布局已经预留了状态栏高度，
-      env() 却仍返回该高度，于是内容被整体推下去、触摸坐标与实际绘制位置错位
-      （表现就是「顶部留白很宽、按钮点不上、下拉一下才恢复」）。
-      换成 black 后状态栏仍是深色（视觉不变），但由系统负责预留空间，不再有错位。
+      状态栏保持 black-translucent（深色、沉浸式）。
+      实测：独立窗口模式下网页确实会延伸到状态栏后面，所以必须由页面自己避开。
+      但 env(safe-area-inset-top) 在 iOS 上并不可靠（有时返回 0），
+      因此改为「运行时实测 + 兜底估算」，见下方脚本与 src/lib/safeArea.ts。
     -->
-    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="WealthCard" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="application-name" content="WealthCard" />
     <meta name="format-detection" content="telephone=no" />
 
     <script>
-      // 独立窗口模式（添加到主屏幕）检测：置位后由系统负责安全区，页面不再自己加顶部内边距，
-      // 避免与 iOS 的保留高度叠加。用 early script 保证在首屏绘制前生效。
+      // 顶部安全区：首屏绘制前就要定下来，否则会先看到被状态栏遮住的一帧。
+      // 这里不引模块，直接内联同样逻辑（与 src/lib/safeArea.ts 保持一致）。
       (function () {
+        var root = document.documentElement;
         try {
           var standalone =
             window.navigator.standalone === true ||
             (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
             (window.matchMedia && window.matchMedia('(display-mode: fullscreen)').matches);
-          if (standalone) {
-            document.documentElement.setAttribute('data-standalone', '1');
+          if (standalone) root.setAttribute('data-standalone', '1');
+
+          // 实测 env(safe-area-inset-top)
+          var probe = document.createElement('div');
+          probe.style.cssText =
+            'position:fixed;left:-9999px;top:0;width:0;height:0;pointer-events:none;' +
+            'padding-top:env(safe-area-inset-top, 0px)';
+          (document.body || root).appendChild(probe);
+          var envTop = parseFloat(getComputedStyle(probe).paddingTop) || 0;
+          if (probe.parentNode) probe.parentNode.removeChild(probe);
+
+          var inset = 0;
+          var source = 'env';
+          if (envTop > 0) {
+            inset = envTop;
+          } else if (standalone) {
+            // 仅独立窗口模式需要自己避让状态栏；普通 Safari 的地址栏不会压住内容，
+            // 若也补上会平白多出一大块留白
+            inset = 0;
+            source = 'standalone-no-env';
+            var w = Math.min(window.screen && window.screen.width || 0, window.innerWidth);
+            inset = w >= 420 ? 59 : w >= 390 ? 54 : w >= 375 ? 47 : 20;
+            source = 'estimate';
           }
+          root.style.setProperty('--safe-top', inset + 'px');
+          root.setAttribute('data-safe-top-source', source);
         } catch (e) {
-          /* 检测失败不影响使用 */
+          // 兜底：任何异常都先给一个保守值，避免内容被状态栏盖住
+          root.style.setProperty('--safe-top', '47px');
+          root.setAttribute('data-safe-top-source', 'fallback');
         }
       })();
     </script>

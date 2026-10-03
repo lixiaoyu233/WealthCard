@@ -312,29 +312,17 @@
   */
   /*
     顶部安全区高度。
-
-    这里多一层 --ios-env-top 间接层：默认就是 env(safe-area-inset-top)，
-    单独拎出来是为了能在测试里注入一个「非 0 的安全区」来验证下面的独立模式规则，
-    不必真的拿一台带刘海的 iPhone（Chromium 的 env() 恒为 0）。
-
-    独立模式下系统已经预留了状态栏空间，所以这里置 0，避免叠加造成内容下移、触摸错位。
+    默认取 env()，但真正生效的是首屏前内联脚本写入的实测/兜底值（见 index.html 与 lib/safeArea.ts），
+    因为 iOS 独立窗口模式下 env(safe-area-inset-top) 有时会返回 0，导致内容被状态栏遮住。
   */
   :root {
-    --ios-env-top: env(safe-area-inset-top, 0px);
-    --safe-top: var(--ios-env-top);
-  }
-  :root[data-standalone='1'] {
-    --safe-top: 0px;
+    --safe-top: env(safe-area-inset-top, 0px);
   }
 
   .safe-top {
     /* 走 --safe-top 变量（默认等于 env(safe-area-inset-top)），
        这样独立模式那条规则只要把变量置 0 就能整体生效 */
     padding-top: calc(var(--safe-top, 0px) + 8px);
-  }
-
-  :root[data-standalone='1'] .safe-top {
-    padding-top: 8px;
   }
 
   .no-scrollbar::-webkit-scrollbar {
