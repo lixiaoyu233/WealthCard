@@ -59,7 +59,7 @@ pnpm install && pnpm dev
 
 ## 🚀 本地开发
 
-需要 Node.js ≥ 18（推荐 20/22）。仓库里提交的是 `pnpm-lock.yaml`，因此默认用 **pnpm**（npm 同样可用，只是没有锁定文件）。
+需要 **Node.js ≥ 22.13**（pnpm 11 依赖 `node:sqlite`，Node 20 会报 `ERR_UNKNOWN_BUILTIN_MODULE`）。仓库里提交的是 `pnpm-lock.yaml`，因此默认用 **pnpm**（npm 同样可用，只是没有锁定文件）。
 
 ```bash
 # 1. 安装依赖

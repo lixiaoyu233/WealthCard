@@ -29,10 +29,12 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
 
+      # Node 必须 >= 22.13：pnpm 11 会用到 node:sqlite 内置模块，
+      # 在 Node 20 上会直接抛 ERR_UNKNOWN_BUILTIN_MODULE（已踩过坑）。
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       - name: Install dependencies
