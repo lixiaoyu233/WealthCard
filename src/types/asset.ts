@@ -103,6 +103,11 @@ export interface Category {
   colorName?: string
   /** 是否计入负债（负债类金额取负参与净资产计算） */
   isLiability?: boolean
+  /**
+   * 该分类新增条目时的默认形态。
+   * 空分类无法靠已有条目推断，必须显式声明，否则「基金」会错给成金额表单。
+   */
+  defaultKind?: ItemKind
   items: AssetItem[]
 }
 

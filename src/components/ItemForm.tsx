@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Calculator, Loader2, RefreshCw, Trash2 } from 'lucide-react'
 import type { AssetItem, Category, FundQuote } from '../types/asset'
 import { CURRENCIES, type CurrencyCode, type FxRates, isCurrencyCode, scaleHint, toCny } from '../lib/currency'
-import { isFund, isGold, parseAmount } from '../lib/calc'
+import { defaultItemKind, isFund, isGold, parseAmount } from '../lib/calc'
 import { formatCNY, formatNav, formatRate, formatSigned } from '../lib/format'
 import { makeAmountItem, makeFundItem, makeGoldItem } from '../hooks/usePortfolio'
 import { fetchFundQuotes } from '../lib/fundService'
@@ -109,7 +109,8 @@ const FIELD_META: Record<Exclude<PickerField, null>, FieldMeta> = {
 
 export default function ItemForm({ category, rates, initial, onSubmit, onDelete, onCancel }: ItemFormProps) {
   const editing = Boolean(initial)
-  const kind: AssetItem['kind'] = initial?.kind ?? (category.items.some(isFund) ? 'fund' : 'amount')
+  // 编辑时沿用原形态；新增时按分类推断（空分类也能正确给出基金/黄金表单）
+  const kind: AssetItem['kind'] = initial?.kind ?? defaultItemKind(category)
 
   const [name, setName] = useState(initial?.name ?? '')
   const [note, setNote] = useState(initial?.note ?? '')
@@ -345,13 +346,17 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
     <div className="space-y-3.5">
       {isFundKind ? (
         <div>
-          <label className="field-label">基金代码</label>
+          <label className="field-label" htmlFor="fund-code">
+            基金代码（6 位数字，填完自动查净值）
+          </label>
           <div className="flex gap-2">
             <input
+              id="fund-code"
+              data-testid="fund-code"
               value={code}
               onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
               inputMode="numeric"
-              placeholder="如 161725"
+              placeholder="如 161725 招商中证白酒"
               className="field-input flex-1 tabular-nums"
             />
             <button
@@ -364,7 +369,11 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
               <span className="text-[13px]">查净值</span>
             </button>
           </div>
-          <p className="mt-1 text-[11px] text-ink4">6 位数字，来自天天基金 / 东方财富公开接口</p>
+          <p className="mt-1 text-[11px] leading-relaxed text-ink4">
+            输入 6 位代码即可，名称与净值会自动填入并持续同步（打开页面 / 每 5 分钟 / 右上角刷新）。
+            <br />
+            常用示例：161725 招商中证白酒、000001 华夏成长、510300 沪深300ETF
+          </p>
         </div>
       ) : null}
 

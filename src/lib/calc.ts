@@ -1,6 +1,7 @@
 import type {
   AssetItem,
   Category,
+  ItemKind,
   FundItem,
   FundQuote,
   GoldItem,
@@ -223,6 +224,24 @@ export function valuate(item: AssetItem, rates?: FxRates | null): ItemValuation 
 /** 分类小计（人民币口径；负债类金额本身以负数存储，直接累加） */
 export function categoryTotal(category: Category, rates?: FxRates | null): number {
   return category.items.reduce((sum, item) => sum + valuate(item, rates).value, 0)
+}
+
+/**
+ * 推断某个分类新增条目时应使用哪种表单形态。
+ *
+ * 优先级：分类显式声明 > 分类内已有条目的形态 > 按分类名猜（基金/黄金）> 金额。
+ * 为什么不能只看「分类内是否已有基金」：空分类没有任何条目，
+ * 会导致第一次添加基金时错给成金额表单，用户根本填不了基金代码。
+ */
+export function defaultItemKind(category: Category): ItemKind {
+  if (category.defaultKind) return category.defaultKind
+  const kinds = new Set(category.items.map((i) => i.kind))
+  if (kinds.size === 1 && kinds.has('fund')) return 'fund'
+  if (kinds.size === 1 && kinds.has('gold')) return 'gold'
+  // 兜底：按分类名猜，覆盖用户自建的「基金」「黄金」分类
+  if (/基金/.test(category.name)) return 'fund'
+  if (/黄金|贵金属/.test(category.name)) return 'gold'
+  return 'amount'
 }
 
 /** 分类项数标签文案，如「3项」「1只」「1笔」 */

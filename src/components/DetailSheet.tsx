@@ -62,6 +62,8 @@ export default function DetailSheet({
   const subtotal = categoryTotal(category, rates)
   const displayTotal = category.isLiability ? -Math.abs(subtotal) : subtotal
   const hasFunds = category.items.some(isFund)
+  /** 只按名字判断：空状态时分类里还没有任何条目，无法靠 item.kind 推断 */
+  const isFundCategory = /基金/.test(category.name)
 
   const handleSubmit = (item: AssetItem) => {
     if (mode.view === 'form' && mode.initial) onUpdateItem(category.id, item)
@@ -154,8 +156,19 @@ export default function DetailSheet({
             {/* 条目列表 */}
             {category.items.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-line px-4 py-8 text-center">
-                <p className="text-[13px] text-ink4">还没有记录</p>
-                <p className="mt-1 text-[11px] text-ink4">点击下方「添加条目」开始登记资产</p>
+                <p className="text-[13px] text-ink2">还没有记录</p>
+                {isFundCategory ? (
+                  <>
+                    <p className="mt-2 text-[11.5px] leading-relaxed text-ink4">
+                      点下方「添加条目」，填入 <span className="text-ink2">6 位基金代码</span>
+                      （如 161725）与持有份额，
+                      <br />
+                      应用会自动同步净值并算出盈亏
+                    </p>
+                  </>
+                ) : (
+                  <p className="mt-1 text-[11px] text-ink4">点击下方「添加条目」开始登记资产</p>
+                )}
               </div>
             ) : (
               <ul className="divide-y divide-line overflow-hidden rounded-2xl border border-line">

@@ -33,10 +33,15 @@ export default function Toast({ toast, onDismiss }: { toast: ToastMessage | null
   const Icon = icons[toast.tone]
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 top-0 z-[60] flex justify-center px-4 pt-[max(env(safe-area-inset-top),12px)]">
+    /*
+      放在底部而不是顶部：顶部在 Safari 里会被地址栏、在独立窗口模式下会被灵动岛/状态栏遮挡
+      （env(safe-area-inset-top) 在 Safari 中为 0，压不住地址栏）。
+      底部同时也更靠近拇指，且不会与任何顶部元素冲突。
+    */
+    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[80] flex justify-center px-4 pb-[max(env(safe-area-inset-bottom,0px),16px)]">
       <div
         role="status"
-        className={`pointer-events-auto flex max-w-[440px] animate-sheet-in items-start gap-2 rounded-2xl border px-3.5 py-2.5
+        className={`pointer-events-auto flex max-w-[440px] animate-sheet-in items-start gap-2 rounded-2xl border px-3.5 py-3
           text-[13px] shadow-[0_10px_30px_-10px_rgba(0,0,0,0.9)] backdrop-blur ${tones[toast.tone]}`}
       >
         <Icon size={15} className="mt-0.5 shrink-0" />

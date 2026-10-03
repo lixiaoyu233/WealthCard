@@ -35,6 +35,8 @@ export function createDefaultCategories(): Category[] {
       icon: 'chart-pie',
       color: accentVar('green'),
       colorName: 'green',
+      // 空分类也要知道该用「基金」表单，否则第一次添加会错给成金额表单
+      defaultKind: 'fund',
       items: [],
     },
     {
@@ -44,6 +46,7 @@ export function createDefaultCategories(): Category[] {
       icon: 'gem',
       color: accentVar('gold'),
       colorName: 'gold',
+      defaultKind: 'gold',
       items: [],
     },
     {

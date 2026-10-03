@@ -57,6 +57,10 @@ export function normalizePortfolio(raw: unknown): Portfolio | null {
       color: typeof raw0.color === 'string' && raw0.color ? raw0.color : (fallback?.color ?? 'var(--accent-blue)'),
       colorName: typeof raw0.colorName === 'string' ? raw0.colorName : fallback?.colorName,
       isLiability: raw0.isLiability === true,
+      defaultKind:
+        raw0.defaultKind === 'fund' || raw0.defaultKind === 'gold' || raw0.defaultKind === 'amount'
+          ? raw0.defaultKind
+          : fallback?.defaultKind,
       items,
     }
   })
