@@ -304,13 +304,37 @@
 
   /*
     顶部安全区。
-    普通 Safari 里 env(safe-area-inset-top) 为 0，只留一点基础内边距；
-    独立窗口模式（添加到主屏幕）下会自动拿到刘海/状态栏高度，
-    保证标题与右上角按钮既不被遮挡、也能正常点按。
-    额外加 8px 是为了让「状态栏文字」和「标题」之间留出呼吸空间。
+
+    - 普通 Safari：env(safe-area-inset-top) 为 0，只留 8px 呼吸空间。
+    - 独立窗口模式（添加到主屏幕）：系统已经为状态栏预留了空间，
+      这里只留 8px —— 不能再叠加 env(safe-area-inset-top)，
+      否则内容会被整体推下去，触摸坐标也会与实际绘制位置错位。
   */
+  /*
+    顶部安全区高度。
+
+    这里多一层 --ios-env-top 间接层：默认就是 env(safe-area-inset-top)，
+    单独拎出来是为了能在测试里注入一个「非 0 的安全区」来验证下面的独立模式规则，
+    不必真的拿一台带刘海的 iPhone（Chromium 的 env() 恒为 0）。
+
+    独立模式下系统已经预留了状态栏空间，所以这里置 0，避免叠加造成内容下移、触摸错位。
+  */
+  :root {
+    --ios-env-top: env(safe-area-inset-top, 0px);
+    --safe-top: var(--ios-env-top);
+  }
+  :root[data-standalone='1'] {
+    --safe-top: 0px;
+  }
+
   .safe-top {
-    padding-top: calc(env(safe-area-inset-top, 0px) + 8px);
+    /* 走 --safe-top 变量（默认等于 env(safe-area-inset-top)），
+       这样独立模式那条规则只要把变量置 0 就能整体生效 */
+    padding-top: calc(var(--safe-top, 0px) + 8px);
+  }
+
+  :root[data-standalone='1'] .safe-top {
+    padding-top: 8px;
   }
 
   .no-scrollbar::-webkit-scrollbar {

@@ -86,5 +86,12 @@ export default {
       },
     },
   },
-  plugins: [],
+  plugins: [
+    // standalone: 变体 → 只在「添加到主屏幕」的独立窗口模式下生效
+    // 独立模式下系统已为状态栏预留空间，页面不能再叠加 safe-area-inset-top
+    function ({ addVariant }) {
+      addVariant('standalone', "html[data-standalone='1'] &")
+    },
+  ],
 }
+

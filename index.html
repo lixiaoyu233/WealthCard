@@ -21,12 +21,37 @@
     <!-- iOS 不读 manifest 里的图标，必须单独提供 apple-touch-icon（PNG） -->
     <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!--
+      状态栏使用 black 而不是 black-translucent。
+      black-translucent 会让网页延伸到状态栏下方，必须靠 env(safe-area-inset-top) 自己补内边距；
+      而 iOS 独立窗口模式在这方面有个已知问题：初次打开时布局已经预留了状态栏高度，
+      env() 却仍返回该高度，于是内容被整体推下去、触摸坐标与实际绘制位置错位
+      （表现就是「顶部留白很宽、按钮点不上、下拉一下才恢复」）。
+      换成 black 后状态栏仍是深色（视觉不变），但由系统负责预留空间，不再有错位。
+    -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
     <meta name="apple-mobile-web-app-title" content="WealthCard" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="application-name" content="WealthCard" />
     <meta name="format-detection" content="telephone=no" />
 
+    <script>
+      // 独立窗口模式（添加到主屏幕）检测：置位后由系统负责安全区，页面不再自己加顶部内边距，
+      // 避免与 iOS 的保留高度叠加。用 early script 保证在首屏绘制前生效。
+      (function () {
+        try {
+          var standalone =
+            window.navigator.standalone === true ||
+            (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+            (window.matchMedia && window.matchMedia('(display-mode: fullscreen)').matches);
+          if (standalone) {
+            document.documentElement.setAttribute('data-standalone', '1');
+          }
+        } catch (e) {
+          /* 检测失败不影响使用 */
+        }
+      })();
+    </script>
     <title>WealthCard · 资产卡包</title>
 
     <!--

@@ -70,7 +70,7 @@ export default function NumberPad({
         className="relative w-full max-w-[480px] animate-sheet-in overflow-hidden rounded-t-[22px] border border-line
           bg-s1 sm:rounded-[22px]"
       >
-        <div className="flex items-center justify-between border-b border-line px-4 py-2.5 pt-[max(env(safe-area-inset-top),10px)]">
+        <div className="flex items-center justify-between border-b border-line px-4 py-2.5" style={{ paddingTop: 'max(var(--safe-top, 0px), 10px)' }}>
           <span className="flex items-center gap-1.5 text-[12px] text-ink4">
             {label}
             {/* 量级提示：直接告诉用户最大的那位是「万」还是「十万」 */}

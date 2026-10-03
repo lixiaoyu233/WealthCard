@@ -42,7 +42,7 @@ export default function Toast({ toast, onDismiss }: { toast: ToastMessage | null
     */
     <div
       className="pointer-events-none fixed inset-0 z-[80] flex items-start justify-center px-4"
-      style={{ paddingTop: 'max(25vh, calc(env(safe-area-inset-top, 0px) + 56px))' }}
+      style={{ paddingTop: 'max(25vh, calc(var(--safe-top, 0px) + 56px))' }}
     >
       <div
         role="status"
