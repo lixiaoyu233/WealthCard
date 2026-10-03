@@ -14,7 +14,7 @@ interface SettingsSheetProps {
   onClose: () => void
   onSetFundDefault: (patch: Partial<AppSettings['fund']>) => void
   onSetFundingSource: (source: FundingSource | undefined) => void
-  onSetShowChart: (v: boolean) => void
+  onSetTrendsEnabled: (v: boolean) => void
   onSetFixed: (patch: Partial<AppSettings['salary']['fixed']>) => void
   onUpsertSalary: (month: string, amount: number) => void
   onRemoveSalary: (month: string) => void
@@ -201,7 +201,7 @@ function FundTab({
 function SalaryTab({
   settings,
   candidates,
-  onSetShowChart,
+  onSetTrendsEnabled,
   onSetFixed,
   onUpsertSalary,
   onRemoveSalary,
@@ -362,18 +362,20 @@ function SalaryTab({
         ) : null}
       </div>
 
-      {/* 走势图开关 */}
+      {/* 走势面板开关（与薪资历史共用一个面板） */}
       <div className="border-t border-line pt-4">
         <label className="flex cursor-pointer items-center justify-between">
           <span>
-            <span className="block text-[13.5px] font-medium text-ink1">在主界面显示薪资走势</span>
-            <span className="mt-0.5 block text-[11.5px] text-ink4">按月汇总的柱状图，默认关闭</span>
+            <span className="block text-[13.5px] font-medium text-ink1">在主界面显示走势</span>
+            <span className="mt-0.5 block text-[11.5px] leading-relaxed text-ink4">
+              净资产 / 总资产 / 负债 / 薪资 四合一；按天记录、按月聚合，默认关闭
+            </span>
           </span>
           <input
             type="checkbox"
-            data-testid="salary-show-chart"
-            checked={settings.salary.showChart}
-            onChange={(e) => onSetShowChart(e.target.checked)}
+            data-testid="trends-enabled"
+            checked={settings.trendsEnabled}
+            onChange={(e) => onSetTrendsEnabled(e.target.checked)}
             className="h-4 w-4 accent-brand"
           />
         </label>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Portfolio } from '../types/asset'
+import { type SnapshotFile, loadSnapshot, saveSnapshot } from '../lib/netWorthHistory'
 import {
   type AppSettings,
   type FixedSalary,
@@ -28,6 +29,18 @@ export function useSettings(portfolio: Portfolio, applyPortfolio: (p: Portfolio)
   const [autoApplied, setAutoApplied] = useState<{ month: string; amount: number; itemName?: string } | null>(null)
   const ranAutoApply = useRef(false)
 
+  /** 总资产月度快照（与设置同源管理，避免再多一层 hook） */
+  const [snapshot, setSnapshot] = useState<SnapshotFile>(() => loadSnapshot())
+  /** 上次落库的序列化内容，避免金额没变时反复写盘 */
+  const lastSaved = useRef<string>('')
+
+  useEffect(() => {
+    const serialized = JSON.stringify(snapshot)
+    if (serialized === lastSaved.current) return
+    lastSaved.current = serialized
+    saveSnapshot(snapshot)
+  }, [snapshot])
+
   useEffect(() => {
     const err = saveSettings(settings)
     if (err) setStorageError(err)
@@ -40,8 +53,8 @@ export function useSettings(portfolio: Portfolio, applyPortfolio: (p: Portfolio)
     setSettings((s) => ({ ...s, fund: { ...s.fund, ...patch } }))
   }, [])
 
-  const setShowChart = useCallback((showChart: boolean) => {
-    setSettings((s) => ({ ...s, salary: { ...s.salary, showChart } }))
+  const setTrendsEnabled = useCallback((trendsEnabled: boolean) => {
+    setSettings((s) => ({ ...s, trendsEnabled }))
   }, [])
 
   const setFixed = useCallback((patch: Partial<FixedSalary>) => {
@@ -128,12 +141,14 @@ export function useSettings(portfolio: Portfolio, applyPortfolio: (p: Portfolio)
   return {
     settings,
     storageError,
+    snapshot,
+    setSnapshot,
     candidates,
     autoApplied,
     dismissAutoApplied: () => setAutoApplied(null),
     setFundDefault,
     setFundingSource,
-    setShowChart,
+    setTrendsEnabled,
     setFixed,
     upsertSalary,
     removeSalary,

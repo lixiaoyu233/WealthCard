@@ -13,12 +13,13 @@ import ConfirmDialog from './components/ConfirmDialog'
 import StrategyCard from './components/StrategyCard'
 import StrategySettingsSheet from './components/StrategySettingsSheet'
 import SettingsSheet from './components/SettingsSheet'
-import SalaryChart from './components/SalaryChart'
+import TrendsPanel from './components/TrendsPanel'
 import Toast, { type ToastMessage, type ToastTone } from './components/Toast'
 import { useStrategy } from './hooks/useStrategy'
 import { useTheme } from './hooks/useTheme'
 import { useSettings } from './hooks/useSettings'
 import { formatMonth } from './lib/settings'
+import { advanceSnapshot } from './lib/netWorthHistory'
 import { categoryTotal } from './lib/calc'
 import { statusLine } from './lib/rebalance'
 
@@ -62,6 +63,21 @@ export default function App() {
 
   /** 策略与再平衡（纯前端计算，配置单独持久化） */
   const strategyState = useStrategy(portfolio)
+
+  /**
+   * 总资产月度快照：数据一变就更新当月；每月第一次打开时把上月定稿。
+   * 计算很轻（遍历一次分类），所以直接在 effect 里推进即可。
+   */
+  useEffect(() => {
+    const advanced = advanceSnapshot(settingsState.snapshot, {
+      portfolio,
+      rates: fx.rates,
+      // 口径与首页一致：是否计入负债由策略设置决定
+      includeLiabilities: strategyState.settings.includeLiabilities,
+    })
+    if (advanced.changed) settingsState.setSnapshot(advanced.file)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [portfolio, fx.rates, strategyState.settings.includeLiabilities])
   const {
     settings: strategySettings,
     strategy,
@@ -312,30 +328,13 @@ export default function App() {
           <StrategyCard result={rebalance} hidden={hidden} onOpenSettings={() => setStrategySheetOpen(true)} />
         </div>
 
-        {/* 薪资走势（在设置里开启后才显示） */}
-        {settingsState.settings.salary.showChart && settingsState.settings.salary.records.length > 0 ? (
+        {/* 走势面板（净资产 / 总资产 / 负债 / 薪资），在设置里开启后才显示 */}
+        {settingsState.settings.trendsEnabled ? (
           <div className="mt-4">
-            <section className="card-surface px-4 py-3.5">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-[13px] font-medium text-ink1">薪资走势</p>
-                  <p className="mt-0.5 text-[11px] text-ink4">
-                    最近 {Math.min(12, settingsState.settings.salary.records.length)} 个月 ·
-                    共 {formatCNY(settingsState.settings.salary.records.reduce((n, r) => n + r.amount, 0), 0)} 元
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setSettingsSheetOpen(true)}
-                  className="text-[11.5px] text-ink3 underline-offset-2 hover:underline"
-                >
-                  管理
-                </button>
-              </div>
-              <div className="mt-2">
-                <SalaryChart records={settingsState.settings.salary.records} />
-              </div>
-            </section>
+            <TrendsPanel
+              points={settingsState.snapshot.points}
+              salaryRecords={settingsState.settings.salary.records}
+            />
           </div>
         ) : null}
 
@@ -459,7 +458,7 @@ export default function App() {
         onClose={() => setSettingsSheetOpen(false)}
         onSetFundDefault={settingsState.setFundDefault}
         onSetFundingSource={settingsState.setFundingSource}
-        onSetShowChart={settingsState.setShowChart}
+        onSetTrendsEnabled={settingsState.setTrendsEnabled}
         onSetFixed={settingsState.setFixed}
         onUpsertSalary={(month, amount) => {
           settingsState.upsertSalary(month, amount)

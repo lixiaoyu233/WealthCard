@@ -53,9 +53,9 @@ export interface FixedSalary {
 export interface AppSettings {
   version: number
   fund: FundDefaults
+  /** 是否在首页显示走势面板（净资产/总资产/负债/薪资 四合一），默认关闭 */
+  trendsEnabled: boolean
   salary: {
-    /** 是否在首页显示薪资走势图 */
-    showChart: boolean
     /** 按月存档的薪资记录 */
     records: SalaryRecord[]
     fixed: FixedSalary
@@ -65,9 +65,9 @@ export interface AppSettings {
 export function createDefaultSettings(): AppSettings {
   return {
     version: 1,
+    trendsEnabled: false,
     fund: { useFunding: false },
     salary: {
-      showChart: false,
       records: [],
       fixed: { enabled: false, amount: 0, payday: 10 },
     },
@@ -154,8 +154,9 @@ export function normalizeSettings(raw: unknown): AppSettings {
       useFunding: fund.useFunding === true,
       lastFundingSource: normalizeSource(fund.lastFundingSource),
     },
+    // 兼容旧数据：早期只有「薪资走势」开关，语义合并为走势面板开关
+    trendsEnabled: raw.trendsEnabled === true || salary.showChart === true,
     salary: {
-      showChart: salary.showChart === true,
       records,
       fixed: {
         enabled: fixed.enabled === true,
