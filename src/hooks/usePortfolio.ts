@@ -361,13 +361,15 @@ export function usePortfolio() {
 
 /** 表单提交时构造条目；金额与份额的数值解析在表单层完成 */
 export function makeAmountItem(input: {
+  /** 编辑时必须传入原 id：reducer 按 id 匹配，传新 id 会导致「保存了但没改」 */
+  id?: string
   name: string
   note?: string
   amount: number
   currency?: CurrencyCode
 }): AssetItem {
   return {
-    id: uid('item'),
+    id: input.id ?? uid('item'),
     kind: 'amount',
     name: input.name,
     note: input.note,

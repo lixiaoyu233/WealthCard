@@ -301,7 +301,14 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
     if (!Number.isFinite(a)) return setError('请输入有效金额')
     if (a === 0) return setError('金额不能为 0')
     return onSubmit(
-      makeAmountItem({ name: name.trim() || '未命名', note: note.trim() || undefined, amount: a, currency }),
+      makeAmountItem({
+        // 编辑时复用原 id，否则更新会匹配不到目标条目
+        id: initial?.id,
+        name: name.trim() || '未命名',
+        note: note.trim() || undefined,
+        amount: a,
+        currency,
+      }),
     )
   }
 
