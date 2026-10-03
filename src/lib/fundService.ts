@@ -56,6 +56,13 @@ export class FundServiceError extends Error {
   }
 }
 
+/** 把内部通道名换成用户能看懂的说法，细节仍留在 attempts 里供排查 */
+function friendlyMessage(attempts: Array<{ source: QuoteSource; error: string }>): string {
+  const hasNotFound = attempts.some((a) => /未返回匹配|不存在|未找到/.test(a.error))
+  if (hasNotFound) return '未查到该代码的行情，可能代码不存在；可手动填写当前净值后保存'
+  return '行情数据源暂时不可用，可先保存，稍后刷新或手动填写当前净值'
+}
+
 /* ------------------------------------------------------------------ *
  * 解析工具
  * ------------------------------------------------------------------ */
@@ -364,10 +371,7 @@ export async function fetchFundQuotes(
 
   if (wanted.length === 0) {
     if (result.size === 0 && stockAttempts.length > 0) {
-      throw new FundServiceError(
-        `所有行情通道均失败：${stockAttempts.map((a) => a.error).join('；')}`,
-        stockAttempts,
-      )
+      throw new FundServiceError(friendlyMessage(stockAttempts), stockAttempts)
     }
     return result
   }
@@ -415,10 +419,7 @@ export async function fetchFundQuotes(
   }
 
   if (result.size === 0) {
-    throw new FundServiceError(
-      attempts.length > 0 ? `所有行情通道均失败：${attempts.map((a) => a.source).join(' / ')}` : '未获取到任何行情',
-      attempts,
-    )
+    throw new FundServiceError(friendlyMessage(attempts), attempts)
   }
   return result
 }

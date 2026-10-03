@@ -145,11 +145,18 @@ export function parseAmount(input: string): number {
  * 优先取盘中估算净值（GSZ），无则回退到最新公布净值（NAV）。
  */
 export function fundCurrentNav(item: FundItem): number | undefined {
+  // 手动净值优先：代码查不到时用户可自行维护，市值与盈亏照常计算
+  if (typeof item.manualNav === 'number' && item.manualNav > 0) return item.manualNav
   const q = item.quote
   if (!q) return undefined
   if (typeof q.estimatedNav === 'number' && q.estimatedNav > 0) return q.estimatedNav
   if (typeof q.publishedNav === 'number' && q.publishedNav > 0) return q.publishedNav
   return undefined
+}
+
+/** 该持仓是否正在使用手动净值（界面据此给出手动维护的提示） */
+export function isManualPriced(item: FundItem): boolean {
+  return typeof item.manualNav === 'number' && item.manualNav > 0
 }
 
 /**

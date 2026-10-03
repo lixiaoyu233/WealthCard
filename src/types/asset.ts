@@ -53,6 +53,11 @@ export interface FundItem extends BaseItem {
   shares: number
   /** 成本单价（每份成本） */
   costNav: number
+  /**
+   * 手动填写的当前净值 / 现价。
+   * 优先于自动同步的结果，用于接口查不到代码或数据源不可用时的兜底。
+   */
+  manualNav?: number
   /** 用户是否自定义过名称；未自定义时用接口返回的基金全称自动补全 */
   manualName?: boolean
   /**

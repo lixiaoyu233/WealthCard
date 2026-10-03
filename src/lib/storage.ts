@@ -119,6 +119,10 @@ function normalizeItem(raw: unknown): Portfolio['categories'][number]['items'][n
         o.market === 'us' || o.market === 'hk' || o.market === 'cn' ? o.market : undefined,
       shares: safeNum(o.shares),
       costNav: safeNum(o.costNav),
+      manualNav:
+        typeof o.manualNav === 'number' && Number.isFinite(o.manualNav) && o.manualNav > 0
+          ? o.manualNav
+          : undefined,
       manualName: o.manualName === true,
       quote: normalizeQuote(o.quote),
     }

@@ -93,6 +93,7 @@ function reducer(state: Portfolio, action: Action): Portfolio {
           nextItems[i] = {
             ...item,
             quote,
+            // 注意：manualNav 不动 —— 用户手动维护的净值优先，不能被同步覆盖
             // 接口回填的市场写回条目，估值时据此选择币种
             market: quote.market ?? item.market ?? 'cn',
             name: item.manualName ? item.name : quote.name || item.name,
@@ -384,6 +385,8 @@ export function makeFundItem(input: {
   market?: HoldingMarket
   shares: number
   costNav: number
+  /** 手动净值：填了优先使用，留空走自动同步 */
+  manualNav?: number
   note?: string
   quote?: FundQuote
 }): FundItem {
@@ -396,6 +399,10 @@ export function makeFundItem(input: {
     market: input.market ?? 'cn',
     shares: safeNum(input.shares),
     costNav: safeNum(input.costNav),
+    manualNav:
+      typeof input.manualNav === 'number' && Number.isFinite(input.manualNav) && input.manualNav > 0
+        ? input.manualNav
+        : undefined,
     quote: input.quote,
   }
 }

@@ -116,7 +116,11 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
    * 是否允许在同一个分类里切换「金额 / 持仓」。
    * 「股票」分类最典型：既能直接记一笔金额，也能登记美股/港股持仓自动同步。
    */
-  const canPickKind = !editing && !/基金/.test(category.name) && /股票|证券/.test(category.name)
+  /**
+   * 允许切换「直接记金额 / 持仓」的分类：
+   * 股票（美股/港股）与基金都支持 —— 有些人只想记个总额，不想填代码。
+   */
+  const canPickKind = !editing && /股票|证券|基金/.test(category.name)
 
   const [name, setName] = useState(initial?.name ?? '')
   const [note, setNote] = useState(initial?.note ?? '')
@@ -124,6 +128,10 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
   const [code, setCode] = useState(initial && isFund(initial) ? initial.code : '')
   const [shares, setShares] = useState(initial && isFund(initial) ? String(initial.shares ?? '') : '')
   const [costNav, setCostNav] = useState(initial && isFund(initial) ? String(initial.costNav ?? '') : '')
+  // 手动净值：接口拉不到数据时的兜底
+  const [manualNav, setManualNav] = useState(
+    initial && isFund(initial) && typeof initial.manualNav === 'number' ? String(initial.manualNav) : '',
+  )
   const [grams, setGrams] = useState(initial && isGold(initial) ? String(initial.grams ?? '') : '')
   const [pricePerGram, setPricePerGram] = useState(initial && isGold(initial) ? String(initial.pricePerGram ?? '') : '')
 
@@ -139,6 +147,8 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
   const [quote, setQuote] = useState<FundQuote | undefined>(initial && isFund(initial) ? initial.quote : undefined)
   const [quoteLoading, setQuoteLoading] = useState(false)
   const [quoteError, setQuoteError] = useState<string | null>(null)
+  /** 记录查失败的代码，避免自动重试打爆接口 */
+  const failedCodeRef = useRef<string>('')
   const nameTouched = useRef(false)
 
   const isFundKind = kind === 'fund'
@@ -147,6 +157,11 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
   const allowStockCode = !/基金/.test(category.name)
   /** 根据已输入的代码推断市场（美股/港股），用于币种提示与校验 */
   const detectedMarket = allowStockCode ? detectStockMarket(code) : isFundKind ? 'cn' : null
+  /** 用户是否填了手动净值 */
+  const manualNavValue = (() => {
+    const m = parseAmount(manualNav)
+    return Number.isFinite(m) && m > 0 ? m : null
+  })()
 
   // 提示词：命中预设用预设，自定义分类给通用示例
   const preset = HINT_PRESETS.find((h) => h.match(category.id, category.name))
@@ -174,15 +189,24 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
       const map = await fetchFundQuotes([code])
       const hit = map.get(code)
       if (!hit) {
-        setQuoteError('未查询到该基金')
+        /**
+         * 接口对不存在的代码会返回 `Datas: null`（HTTP 200），
+         * 即「所有通道都成功但没数据」，不会抛错。这里必须显式判断，
+         * 否则界面上既不报错也没有结果，用户会以为卡住了。
+         */
+        failedCodeRef.current = code.trim()
+        setQuoteError(`未查询到代码 ${code}，可在下方手动填写当前净值`)
       } else {
+        failedCodeRef.current = ''
         setQuote(hit.quote)
         if (!nameTouched.current && !name.trim() && hit.quote.name) {
           setName(hit.quote.name)
         }
       }
     } catch (e) {
+      failedCodeRef.current = code.trim()
       setQuoteError(e instanceof Error ? e.message : '查询失败')
+      // 用户可见的兜底建议由下方「手动净值」输入框承担，这里不再堆叠开发者措辞
     } finally {
       setQuoteLoading(false)
     }
@@ -191,11 +215,12 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
   useEffect(() => {
     // 境内基金要求 6 位数字；股票分类接受美股/港股代码
     const ready = allowStockCode ? code.trim().length >= 2 : validCode
-    if (!isFundKind || !ready || editing) return
+    // 已手动填净值时不再自动查询，尊重用户输入
+    if (!isFundKind || !ready || editing || manualNavValue) return
     const timer = window.setTimeout(() => void loadQuote(true), 600)
     return () => window.clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [code, isFundKind])
+  }, [code, isFundKind, manualNavValue])
 
   /* ---------------- 实时预览 ---------------- */
   const preview = useMemo(() => {
@@ -225,7 +250,8 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
     if (isFundKind) {
       // 境内基金要求 6 位数字；股票分类允许美股（SPY）与港股（00700）
       const isMarketCode = allowStockCode && detectStockMarket(code) !== null
-      if (!validCode && !isMarketCode) {
+      // 手动填了净值就允许没有代码（例如买了查不到的自营/银行理财）
+      if (!manualNavValue && !validCode && !isMarketCode) {
         return setError(
           allowStockCode
             ? '代码格式不对：境内基金填 6 位数字，美股/美股ETF 填字母代码（如 SPY、QQQ），港股填数字（如 00700）'
@@ -239,12 +265,13 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
       const item = makeFundItem({
         id: initial?.id,
         // 用户没填名称、且自动查询还没回来时，退回基金全称 / 代码，避免出现无名条目
-        name: name.trim() || quote?.name || code,
+        name: name.trim() || quote?.name || code || '未命名持仓',
         code,
         // 记录市场：决定计价币种（境内 CNY / 美股 USD / 港股 HKD）
         market: quote?.market ?? detectedMarket ?? 'cn',
         shares: s,
         costNav: c,
+        manualNav: manualNavValue ?? undefined,
         note: note.trim() || undefined,
         quote,
       })
@@ -428,8 +455,14 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
             />
             <button
               type="button"
+              data-testid="query-nav"
+              title={manualNavValue ? '已手动填写净值，清空后才会自动查询' : '查询最新净值'}
               onClick={() => void loadQuote()}
-              disabled={quoteLoading || !validCode}
+              disabled={
+                quoteLoading ||
+                !!manualNavValue ||
+                !(validCode || (allowStockCode && code.trim().length >= 2))
+              }
               className="btn-ghost shrink-0 px-3"
             >
               {quoteLoading ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
@@ -473,7 +506,9 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
               <Loader2 size={13} className="animate-spin" /> 正在获取最新估值…
             </p>
           ) : quoteError ? (
-            <p className="text-[12px] tone-warn/90">{quoteError}，可先保存，稍后在详情页刷新</p>
+            <p className="text-[12px] tone-warn" data-testid="quote-error">
+              {quoteError}
+            </p>
           ) : quote ? (
             <div className="space-y-1.5">
               <p className="truncate text-[13px] font-medium text-ink2">{quote.name || code}</p>
@@ -550,6 +585,33 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
 
       {isFundKind ? numberField('costNav', costNav, setCostNav) : null}
       {isGoldKind ? numberField('pricePerGram', pricePerGram, setPricePerGram) : null}
+
+      {isFundKind ? (
+        <div>
+          <label className="field-label" htmlFor="manual-nav">
+            当前净值 / 现价（手动，可留空）
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              id="manual-nav"
+              data-testid="manual-nav"
+              value={manualNav}
+              onChange={(e) => setManualNav(e.target.value)}
+              inputMode="decimal"
+              placeholder="留空则自动同步"
+              className="field-input flex-1 tabular-nums"
+            />
+            {manualNavValue ? (
+              <span className="shrink-0 text-[12px] tone-info">手动</span>
+            ) : null}
+          </div>
+          <p className="mt-1 text-[11px] leading-relaxed text-ink4">
+            {manualNavValue
+              ? '正在使用你填写的净值估值，自动同步已暂停；清空后恢复自动更新。'
+              : '代码搜不到、或接口暂时不可用时，在这里填当前净值，市值与盈亏照常计算。'}
+          </p>
+        </div>
+      ) : null}
 
       <div>
         <label className="field-label">{nameLabel}</label>
