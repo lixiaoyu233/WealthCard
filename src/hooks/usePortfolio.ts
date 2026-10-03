@@ -31,6 +31,16 @@ type Action =
   | { type: 'removeCategory'; id: string }
   | { type: 'moveCategory'; id: string; dir: -1 | 1 }
   | { type: 'addItem'; categoryId: string; item: AssetItem }
+  | {
+      type: 'addFundedItem'
+      categoryId: string
+      item: AssetItem
+      /** 从哪个现金项目扣款 */
+      sourceCategoryId: string
+      sourceItemId: string
+      /** 扣减金额（正数） */
+      amount: number
+    }
   | { type: 'updateItem'; categoryId: string; itemId: string; item: AssetItem }
   | { type: 'removeItem'; categoryId: string; itemId: string }
   | { type: 'mergeQuotes'; quotes: FundQuote[]; at: number }
@@ -65,6 +75,31 @@ function reducer(state: Portfolio, action: Action): Portfolio {
 
     case 'addItem':
       return mapCategory(state, action.categoryId, (c) => ({ ...c, items: [...c.items, action.item] }))
+
+    case 'addFundedItem': {
+      /**
+       * 「买入基金 + 从现金扣款」必须是一个原子动作：
+       * 分两次 dispatch 时，两次渲染之间会出现「两个项目都还是旧值」的中间态，
+       * 刷新够快就可能把中间态写进 localStorage。
+       */
+      const afterAdd = mapCategory(state, action.categoryId, (c) => ({
+        ...c,
+        items: [...c.items, action.item],
+      }))
+      const found = afterAdd.categories
+        .find((c) => c.id === action.sourceCategoryId)
+        ?.items.some((i) => i.id === action.sourceItemId && i.kind === 'amount')
+      if (!found) return afterAdd
+
+      return mapCategory(afterAdd, action.sourceCategoryId, (c) => ({
+        ...c,
+        items: c.items.map((i) =>
+          i.id === action.sourceItemId && i.kind === 'amount'
+            ? { ...i, amount: i.amount - action.amount }
+            : i,
+        ),
+      }))
+    }
 
     case 'updateItem':
       return mapCategory(state, action.categoryId, (c) => ({
@@ -302,6 +337,16 @@ export function usePortfolio() {
 
   /* ---------- 条目操作 ---------- */
   const addItem = useCallback((categoryId: string, item: AssetItem) => dispatch({ type: 'addItem', categoryId, item }), [])
+
+  /**
+   * 新增条目并同时从某个现金项目扣款。
+   * 用于「买入基金时从现金划拨」：基金 +X，现金 −X，净资产不变。
+   */
+  const addFundedItem = useCallback(
+    (categoryId: string, item: AssetItem, sourceCategoryId: string, sourceItemId: string, amount: number) =>
+      dispatch({ type: 'addFundedItem', categoryId, item, sourceCategoryId, sourceItemId, amount }),
+    [],
+  )
   const updateItem = useCallback(
     (categoryId: string, item: AssetItem) => dispatch({ type: 'updateItem', categoryId, itemId: item.id, item }),
     [],
@@ -352,6 +397,7 @@ export function usePortfolio() {
     removeCategory,
     moveCategory,
     addItem,
+    addFundedItem,
     updateItem,
     removeItem,
     resetAll,

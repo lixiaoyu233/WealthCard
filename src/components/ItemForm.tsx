@@ -4,6 +4,8 @@ import type { AssetItem, Category, FundQuote } from '../types/asset'
 import { CURRENCIES, type CurrencyCode, type FxRates, isCurrencyCode, scaleHint, toCny } from '../lib/currency'
 import { defaultItemKind, isFund, isGold, parseAmount } from '../lib/calc'
 import { HOLDING_MARKET_CURRENCY, detectStockMarket } from '../lib/usStock'
+import type { CashCandidate, FundingSource } from '../lib/settings'
+import { findCandidate } from '../lib/settings'
 import { formatCNY, formatNav, formatRate, formatSigned } from '../lib/format'
 import { makeAmountItem, makeFundItem, makeGoldItem } from '../hooks/usePortfolio'
 import { fetchFundQuotes } from '../lib/fundService'
@@ -13,6 +15,14 @@ interface ItemFormProps {
   category: Category
   /** 汇率：外币录入时实时预览折算金额 */
   rates?: FxRates | null
+  /** 可作为资金划拨来源的项目（金额类、余额为正） */
+  cashCandidates?: CashCandidate[]
+  /** 基金申购默认方式（来自设置） */
+  fundDefault?: { useFunding: boolean; lastFundingSource?: FundingSource }
+  /** 记住本次选择的资金来源，下次自动带出 */
+  onRememberFunding?: (source: FundingSource | undefined) => void
+  /** 带资金划拨的提交：由上层在同一动作里完成「基金 +X / 现金 −X」 */
+  onSubmitFunded?: (item: AssetItem, source: FundingSource, amount: number) => void
   /** 传入表示编辑，不传表示新增 */
   initial?: AssetItem
   onSubmit: (item: AssetItem) => void
@@ -108,7 +118,18 @@ const FIELD_META: Record<Exclude<PickerField, null>, FieldMeta> = {
   },
 }
 
-export default function ItemForm({ category, rates, initial, onSubmit, onDelete, onCancel }: ItemFormProps) {
+export default function ItemForm({
+  category,
+  rates,
+  initial,
+  cashCandidates = [],
+  fundDefault,
+  onRememberFunding,
+  onSubmitFunded,
+  onSubmit,
+  onDelete,
+  onCancel,
+}: ItemFormProps) {
   const editing = Boolean(initial)
   // 编辑时沿用原形态；新增时按分类推断（空分类也能正确给出基金/黄金表单）
   const [kind, setKind] = useState<AssetItem['kind']>(() => initial?.kind ?? defaultItemKind(category))
@@ -142,6 +163,15 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
     }
     return 'CNY'
   })
+  /**
+   * 资金划拨：新增基金持仓时可以从某个现金项目扣款，
+   * 这样基金 +X、现金 −X，净资产不变。
+   * 只在「新增」时提供——编辑旧条目再补划拨会让对账变复杂。
+   */
+  const [useFunding, setUseFunding] = useState(false)
+  const [fundingSourceId, setFundingSourceId] = useState<string>(
+    fundDefault?.lastFundingSource?.itemId ?? '',
+  )
   const [picker, setPicker] = useState<PickerField>(null)
   const [error, setError] = useState<string | null>(null)
   const [quote, setQuote] = useState<FundQuote | undefined>(initial && isFund(initial) ? initial.quote : undefined)
@@ -277,6 +307,26 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
       })
       // 只有用户真正手填过名称时才锁定，否则允许后续同步用接口全称补全
       item.manualName = nameTouched.current && Boolean(name.trim())
+      // 从现金划拨：金额取「份额 × 成本单价」折算后的人民币，作为扣款额
+      const costCny = toCny(s * c, HOLDING_MARKET_CURRENCY[item.market ?? 'cn'] ?? 'CNY', rates)
+      const deduct = costCny === undefined ? s * c : costCny
+      if (useFunding) {
+        if (!fundingSource) {
+          setError('请选择要扣款的现金项目，或关闭「从现有项目划拨」')
+          return
+        }
+        const cand = cashCandidates.find((x) => x.itemId === fundingSource.itemId)
+        if (!cand || cand.amount < deduct) {
+          setError(`「${fundingSource.itemName}」余额不足（可用 ${formatCNY(cand?.amount ?? 0)} 元，需 ${formatCNY(deduct)} 元）`)
+          return
+        }
+        onRememberFunding?.(fundingSource)
+        const funded = { ...item, fundedFrom: { ...fundingSource, amount: deduct } }
+        // 有专门的处理函数时走它（能原子地同时改两处），否则退回普通提交
+        if (onSubmitFunded) return onSubmitFunded(funded, fundingSource, deduct)
+        return onSubmit(funded)
+      }
+      onRememberFunding?.(undefined)
       return onSubmit(item)
     }
 
@@ -359,6 +409,14 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
     )
   }
 
+  /** 当前选中的资金来源（需校验仍然存在且余额充足） */
+  const fundingSource: FundingSource | undefined = (() => {
+    if (!useFunding) return undefined
+    const hit = findCandidate(cashCandidates, { categoryId: '', itemId: fundingSourceId, itemName: '' } as FundingSource)
+      ?? cashCandidates.find((c) => c.itemId === fundingSourceId)
+    return hit ? { categoryId: hit.categoryId, itemId: hit.itemId, itemName: hit.itemName } : undefined
+  })()
+
   /** 外币录入时的折算预览（人民币） */
   const convertedPreview = (() => {
     if (currency === 'CNY') return null
@@ -368,6 +426,16 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
     if (!Number.isFinite(parsed)) return null
     const cny = toCny(parsed, currency, rates)
     return { cny, missing: cny === undefined }
+  })()
+
+  /** 本次买入成本（人民币），用于划拨金额提示 */
+  const costPreview = (() => {
+    const sh = parseAmount(shares)
+    const c = parseAmount(costNav)
+    if (!Number.isFinite(sh) || sh <= 0 || !Number.isFinite(c) || c < 0) return null
+    const market = detectedMarket ?? 'cn'
+    const cny = toCny(sh * c, HOLDING_MARKET_CURRENCY[market] ?? 'CNY', rates)
+    return cny === undefined ? sh * c : cny
   })()
 
   const pickerValue = (field: PickerField) => {
@@ -591,6 +659,68 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
       ) : null}
 
       {isFundKind ? numberField('costNav', costNav, setCostNav) : null}
+
+      {/* 资金划拨：只在新增基金持仓时提供 */}
+      {isFundKind && !editing ? (
+        <div className="rounded-xl border border-line bg-s2 px-3.5 py-3">
+          <label className="flex cursor-pointer items-center justify-between gap-3">
+            <span>
+              <span className="block text-[13px] text-ink1">从现有项目划拨</span>
+              <span className="mt-0.5 block text-[11px] leading-relaxed text-ink4">
+                基金增加的同时，所选现金项目相应减少（净资产不变）
+              </span>
+            </span>
+            <input
+              type="checkbox"
+              data-testid="use-funding"
+              checked={useFunding}
+              onChange={(e) => setUseFunding(e.target.checked)}
+              className="h-4 w-4 shrink-0 accent-brand"
+            />
+          </label>
+
+          {useFunding ? (
+            <div className="mt-3">
+              {cashCandidates.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-line px-3 py-2.5 text-[11.5px] leading-relaxed text-ink4">
+                  没有可用的现金项目。先到「现金与固定资产」添加一个金额类条目（如「招行活期」）。
+                </p>
+              ) : (
+                <>
+                  <select
+                    data-testid="funding-source"
+                    value={fundingSourceId}
+                    onChange={(e) => setFundingSourceId(e.target.value)}
+                    className="field-input"
+                  >
+                    <option value="">请选择扣款项目</option>
+                    {cashCandidates.map((c) => (
+                      <option key={c.itemId} value={c.itemId}>
+                        {c.itemName}（余额 {formatCNY(c.amount, 0)}）
+                      </option>
+                    ))}
+                  </select>
+                  {fundingSource && costPreview ? (
+                    <p className="mt-1.5 text-[11px] leading-relaxed text-ink4">
+                      将扣除 <span className="text-ink2">{formatCNY(costPreview)}</span> 元，
+                      「{fundingSource.itemName}」余额变为{' '}
+                      {formatCNY((cashCandidates.find((x) => x.itemId === fundingSource.itemId)?.amount ?? 0) - costPreview)} 元
+                    </p>
+                  ) : null}
+                </>
+              )}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* 编辑已有持仓时，回显它的资金来源，只作说明不可改 */}
+      {isFundKind && editing && initial && isFund(initial) && initial.fundedFrom ? (
+        <p className="rounded-xl border border-line bg-s2 px-3.5 py-2.5 text-[11.5px] leading-relaxed text-ink4">
+          该持仓由「{initial.fundedFrom.itemName}」划拨 {formatCNY(initial.fundedFrom.amount)} 元买入
+          （资金来源在创建时确定，此处不可修改）
+        </p>
+      ) : null}
       {isGoldKind ? numberField('pricePerGram', pricePerGram, setPricePerGram) : null}
 
       {isFundKind ? (

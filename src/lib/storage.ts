@@ -124,6 +124,18 @@ function normalizeItem(raw: unknown): Portfolio['categories'][number]['items'][n
           ? o.manualNav
           : undefined,
       manualName: o.manualName === true,
+      fundedFrom: (() => {
+        const f = o.fundedFrom
+        if (!f || typeof f !== 'object') return undefined
+        const r = f as Record<string, unknown>
+        if (typeof r.categoryId !== 'string' || typeof r.itemId !== 'string') return undefined
+        return {
+          categoryId: r.categoryId,
+          itemId: r.itemId,
+          itemName: typeof r.itemName === 'string' ? r.itemName : '现金项目',
+          amount: safeNum(r.amount),
+        }
+      })(),
       quote: normalizeQuote(o.quote),
     }
   }

@@ -12,9 +12,13 @@ import CategoryForm from './components/CategoryForm'
 import ConfirmDialog from './components/ConfirmDialog'
 import StrategyCard from './components/StrategyCard'
 import StrategySettingsSheet from './components/StrategySettingsSheet'
+import SettingsSheet from './components/SettingsSheet'
+import SalaryChart from './components/SalaryChart'
 import Toast, { type ToastMessage, type ToastTone } from './components/Toast'
 import { useStrategy } from './hooks/useStrategy'
 import { useTheme } from './hooks/useTheme'
+import { useSettings } from './hooks/useSettings'
+import { formatMonth } from './lib/settings'
 import { categoryTotal } from './lib/calc'
 import { statusLine } from './lib/rebalance'
 
@@ -40,6 +44,7 @@ export default function App() {
     removeCategory,
     moveCategory,
     addItem,
+    addFundedItem,
     updateItem,
     removeItem,
     resetAll,
@@ -48,6 +53,12 @@ export default function App() {
 
   /** 主题：默认跟随系统，可手动切日间 / 夜间 */
   const { mode: themeMode, cycle: cycleTheme } = useTheme()
+
+  /**
+   * 设置：基金申购资金来源 + 薪资。
+   * 薪资自动入账会改动资产，所以要把新的 portfolio 写回去。
+   */
+  const settingsState = useSettings(portfolio, (next) => importPortfolio(next))
 
   /** 策略与再平衡（纯前端计算，配置单独持久化） */
   const strategyState = useStrategy(portfolio)
@@ -60,6 +71,7 @@ export default function App() {
   } = strategyState
 
   const [strategySheetOpen, setStrategySheetOpen] = useState(false)
+  const [settingsSheetOpen, setSettingsSheetOpen] = useState(false)
   const [openCategoryId, setOpenCategoryId] = useState<string | null>(null)
   const [categoryForm, setCategoryForm] = useState<{ open: boolean; initial?: Category | null }>({ open: false })
   const [confirmReset, setConfirmReset] = useState(false)
@@ -81,6 +93,15 @@ export default function App() {
     for (const c of portfolio.categories) out[c.id] = categoryTotal(c, fx.rates)
     return out
   }, [portfolio, fx.rates])
+
+  // 固定薪资自动入账提示（只提示一次）
+  useEffect(() => {
+    if (!settingsState.autoApplied) return
+    const { month, amount, itemName } = settingsState.autoApplied
+    notify(`固定薪资已入账：${formatMonth(month)} +${formatCNY(amount, 0)} 元 → ${itemName ?? '现金项目'}`, 'success')
+    settingsState.dismissAutoApplied()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsState.autoApplied])
 
   // 版本升级提示：新增了内置分类（只提示一次）
   useEffect(() => {
@@ -221,6 +242,7 @@ export default function App() {
           onRefresh={() => void handleRefresh()}
           themeMode={themeMode}
           onCycleTheme={cycleTheme}
+          onOpenSettings={() => setSettingsSheetOpen(true)}
           strategyStatus={{ text: statusLine(rebalance), level: rebalance.health }}
           fx={{
             hasForeign: exposure.foreignItemCount > 0,
@@ -289,6 +311,33 @@ export default function App() {
         <div className="mt-4">
           <StrategyCard result={rebalance} hidden={hidden} onOpenSettings={() => setStrategySheetOpen(true)} />
         </div>
+
+        {/* 薪资走势（在设置里开启后才显示） */}
+        {settingsState.settings.salary.showChart && settingsState.settings.salary.records.length > 0 ? (
+          <div className="mt-4">
+            <section className="card-surface px-4 py-3.5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-[13px] font-medium text-ink1">薪资走势</p>
+                  <p className="mt-0.5 text-[11px] text-ink4">
+                    最近 {Math.min(12, settingsState.settings.salary.records.length)} 个月 ·
+                    共 {formatCNY(settingsState.settings.salary.records.reduce((n, r) => n + r.amount, 0), 0)} 元
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSettingsSheetOpen(true)}
+                  className="text-[11.5px] text-ink3 underline-offset-2 hover:underline"
+                >
+                  管理
+                </button>
+              </div>
+              <div className="mt-2">
+                <SalaryChart records={settingsState.settings.salary.records} />
+              </div>
+            </section>
+          </div>
+        ) : null}
 
         {/* 基金持仓汇总 */}
         {stats.cost > 0 ? (
@@ -362,6 +411,13 @@ export default function App() {
         total={portfolio.categories.length}
         syncing={sync.loading}
         rates={fx.rates}
+        cashCandidates={settingsState.candidates}
+        fundDefault={settingsState.settings.fund}
+        onRememberFunding={settingsState.setFundingSource}
+        onAddFundedItem={(categoryId, item, source, amount) => {
+          addFundedItem(categoryId, item, source.categoryId, source.itemId, amount)
+          notify(`已从「${source.itemName}」划拨 ${formatCNY(amount, 0)} 元买入`, 'success')
+        }}
         onClose={() => setOpenCategoryId(null)}
         onAddItem={handleAddItem}
         onUpdateItem={(categoryId, item) => {
@@ -392,6 +448,32 @@ export default function App() {
             : undefined
         }
         onClose={() => setCategoryForm({ open: false })}
+      />
+
+      {/* 设置：基金申购 + 薪资 */}
+      <SettingsSheet
+        open={settingsSheetOpen}
+        settings={settingsState.settings}
+        portfolio={portfolio}
+        candidates={settingsState.candidates}
+        onClose={() => setSettingsSheetOpen(false)}
+        onSetFundDefault={settingsState.setFundDefault}
+        onSetFundingSource={settingsState.setFundingSource}
+        onSetShowChart={settingsState.setShowChart}
+        onSetFixed={settingsState.setFixed}
+        onUpsertSalary={(month, amount) => {
+          settingsState.upsertSalary(month, amount)
+          notify(`已记录 ${formatMonth(month)} 薪资`, 'success')
+        }}
+        onRemoveSalary={(month) => {
+          settingsState.removeSalary(month)
+          notify(`已删除 ${formatMonth(month)} 记录`, 'success')
+        }}
+        onApplySalary={(month) => {
+          const r = settingsState.applySalary(month)
+          notify(r.message, r.ok ? 'success' : 'error')
+          return r
+        }}
       />
 
       {/* 策略设置 */}

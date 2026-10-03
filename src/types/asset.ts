@@ -61,6 +61,11 @@ export interface FundItem extends BaseItem {
   /** 用户是否自定义过名称；未自定义时用接口返回的基金全称自动补全 */
   manualName?: boolean
   /**
+   * 该持仓的资金来源（从哪个现金/固资项目划拨买入）。
+   * 金额已从来源项目扣减，这里只作记录与对账。
+   */
+  fundedFrom?: { categoryId: string; itemId: string; itemName: string; amount: number }
+  /**
    * 用户手动标记的资产类型；不填时由基金名称关键词自动识别（见 calc.effectiveFundClass）。
    * 再平衡计算会用它把基金归到「股票」或「债券」等策略类别。
    */

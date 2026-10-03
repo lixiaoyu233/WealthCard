@@ -1,4 +1,4 @@
-import { Eye, EyeOff, MonitorSmartphone, Moon, RefreshCw, Sun, TrendingDown, TrendingUp } from 'lucide-react'
+import { Eye, EyeOff, MonitorSmartphone, Moon, RefreshCw, Settings, Sun, TrendingDown, TrendingUp } from 'lucide-react'
 import type { HistoryPoint } from '../types/asset'
 import type { Summary } from '../types/asset'
 import { formatCNY, formatCompactCNY, formatRelative, formatSigned } from '../lib/format'
@@ -16,6 +16,8 @@ interface HeaderProps {
   /** 当前主题模式与切换动作 */
   themeMode: ThemeMode
   onCycleTheme: () => void
+  /** 打开设置面板 */
+  onOpenSettings: () => void
   /** 组合状态小字：当前策略 · 偏离度 · 健康度 */
   strategyStatus?: {
     text: string
@@ -54,6 +56,7 @@ export default function Header({
   onRefresh,
   themeMode,
   onCycleTheme,
+  onOpenSettings,
   strategyStatus,
   fx,
 }: HeaderProps) {
@@ -71,6 +74,15 @@ export default function Header({
       <div className="flex items-center justify-between">
         <h1 className="text-[22px] font-semibold tracking-tight text-ink1">WealthCard</h1>
         <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            aria-label="设置"
+            data-testid="open-settings"
+            className="rounded-full p-2 text-ink4 transition hover:bg-s3 hover:text-ink2"
+          >
+            <Settings size={17} />
+          </button>
           <button
             type="button"
             onClick={onCycleTheme}

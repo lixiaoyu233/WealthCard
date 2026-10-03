@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { ArrowLeft, ArrowDown, ArrowUp, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import type { AssetItem, Category, HistoryPoint } from '../types/asset'
 import type { FxRates } from '../lib/currency'
+import type { CashCandidate, FundingSource } from '../lib/settings'
 import { categoryTotal, isFund, valuate } from '../lib/calc'
 import { formatCNY, formatNav, formatQty, formatRate, formatRelative, formatSigned, moneyDisplay } from '../lib/format'
 import { resolveIcon } from '../lib/icons'
@@ -18,6 +19,18 @@ interface DetailSheetProps {
   history?: HistoryPoint[]
   /** 汇率：外币条目折算用 */
   rates?: FxRates | null
+  /** 可作为资金划拨来源的项目 */
+  cashCandidates?: CashCandidate[]
+  /** 基金申购默认方式 */
+  fundDefault?: { useFunding: boolean; lastFundingSource?: FundingSource }
+  onRememberFunding?: (source: FundingSource | undefined) => void
+  /** 带划拨的新增：基金 +X / 现金 −X */
+  onAddFundedItem?: (
+    categoryId: string,
+    item: AssetItem,
+    source: FundingSource,
+    amount: number,
+  ) => void
   onClose: () => void
   onAddItem: (categoryId: string, item: AssetItem) => void
   onUpdateItem: (categoryId: string, item: AssetItem) => void
@@ -37,6 +50,10 @@ export default function DetailSheet({
   total = 1,
   syncing,
   rates,
+  cashCandidates,
+  fundDefault,
+  onRememberFunding,
+  onAddFundedItem,
   onClose,
   onAddItem,
   onUpdateItem,
@@ -68,6 +85,12 @@ export default function DetailSheet({
   const handleSubmit = (item: AssetItem) => {
     if (mode.view === 'form' && mode.initial) onUpdateItem(category.id, item)
     else onAddItem(category.id, item)
+    setMode({ view: 'list' })
+  }
+
+  /** 从现金划拨买入：两处金额必须一起改，所以交给上层一次性处理 */
+  const handleSubmitFunded = (item: AssetItem, source: FundingSource, amount: number) => {
+    onAddFundedItem?.(category.id, item, source, amount)
     setMode({ view: 'list' })
   }
 
@@ -228,6 +251,10 @@ export default function DetailSheet({
           <ItemForm
             category={category}
             rates={rates}
+            cashCandidates={cashCandidates}
+            fundDefault={fundDefault}
+            onRememberFunding={onRememberFunding}
+            onSubmitFunded={onAddFundedItem ? handleSubmitFunded : undefined}
             initial={mode.initial}
             onSubmit={handleSubmit}
             onDelete={

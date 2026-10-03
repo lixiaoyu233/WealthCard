@@ -34,11 +34,16 @@ export default function Toast({ toast, onDismiss }: { toast: ToastMessage | null
 
   return (
     /*
-      放在底部而不是顶部：顶部在 Safari 里会被地址栏、在独立窗口模式下会被灵动岛/状态栏遮挡
-      （env(safe-area-inset-top) 在 Safari 中为 0，压不住地址栏）。
-      底部同时也更靠近拇指，且不会与任何顶部元素冲突。
+      位置：屏幕上方约 1/4 处。
+      放这里的理由：顶部紧贴边缘会被 Safari 地址栏 / 灵动岛遮挡
+      （env(safe-area-inset-top) 在 Safari 里是 0），而底部又离视线太远、
+      容易和底部按钮打架。1/4 处既在安全区内，也在视线焦点附近。
+      用 flex 撑满 + 顶部 25% 的 padding 实现，不依赖具体像素值。
     */
-    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[80] flex justify-center px-4 pb-[max(env(safe-area-inset-bottom,0px),16px)]">
+    <div
+      className="pointer-events-none fixed inset-0 z-[80] flex items-start justify-center px-4"
+      style={{ paddingTop: 'max(25vh, calc(env(safe-area-inset-top, 0px) + 56px))' }}
+    >
       <div
         role="status"
         className={`pointer-events-auto flex max-w-[440px] animate-sheet-in items-start gap-2 rounded-2xl border px-3.5 py-3
