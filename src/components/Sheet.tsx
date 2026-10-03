@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 import { X } from 'lucide-react'
+import { lockBodyScroll, unlockBodyScroll } from '../lib/scrollLock'
 
 interface SheetProps {
   open: boolean
@@ -36,11 +37,15 @@ export default function Sheet({
       if (e.key === 'Escape') onClose()
     }
     document.addEventListener('keydown', onKey)
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+    /*
+     * 用引用计数的滚动锁，而不是「保存上一次的 overflow 再还原」：
+     * 面板会叠加（详情 → 删除确认），后开的那个读到的是 hidden，
+     * 当成原值存下来后关闭时会还原成 hidden，滚动就永久失效了。
+     */
+    lockBodyScroll()
     return () => {
       document.removeEventListener('keydown', onKey)
-      document.body.style.overflow = prev
+      unlockBodyScroll()
     }
   }, [open, onClose])
 
