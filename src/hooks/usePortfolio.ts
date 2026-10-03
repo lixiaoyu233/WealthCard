@@ -184,6 +184,16 @@ export function usePortfolio() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasForeign])
 
+  /**
+   * 汇率就绪标记（内部状态，供自动化测试与线上排查使用）：
+   * `data-fx-ready="1"` 表示「有外币且已拿到可用汇率」，外币折算已经准确。
+   */
+  useEffect(() => {
+    const ready = hasForeign && hasUsableRates(rates) && !isFxStale(rates)
+    if (ready) document.documentElement.setAttribute('data-fx-ready', '1')
+    else document.documentElement.removeAttribute('data-fx-ready')
+  }, [hasForeign, rates])
+
   /** 记录当日净资产快照，用于「较上次」变化提示 */
   const takeSnapshot = useCallback(
     (p: Portfolio) => {
