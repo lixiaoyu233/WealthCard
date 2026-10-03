@@ -366,12 +366,28 @@ export function categoryNeedsSync(category: Category): boolean {
   return category.items.some((i) => isFund(i))
 }
 
-/** 收集全部基金代码（去重、仅保留 6 位数字） */
+/**
+ * 收集所有需要拉行情的代码（去重）。
+ *
+ * 包含三类：
+ * - 境内基金：6 位数字（天天基金接口）
+ * - 美股 / 美股 ETF：字母代码，如 SPY、QQQ（腾讯行情）
+ * - 港股：1~5 位数字，如 00700（腾讯行情）
+ *
+ * 注意：早期只收 6 位数字，导致美股/港股持仓拿不到行情。
+ */
 export function collectFundCodes(portfolio: Portfolio): string[] {
   const codes = new Set<string>()
   for (const category of portfolio.categories) {
     for (const item of category.items) {
-      if (isFund(item) && /^\d{6}$/.test(item.code)) codes.add(item.code)
+      if (!isFund(item)) continue
+      const code = (item.code ?? '').trim()
+      if (!code) continue
+      const market = item.market ?? 'cn'
+      // 6 位数字属于境内基金；其余交给市场识别（字母=美股，1~5 位数字=港股）
+      const isDomestic = /^\d{6}$/.test(code)
+      const isStock = market === 'us' ? /^[A-Za-z][A-Za-z.\-]{0,5}$/.test(code) : /^\d{1,5}$/.test(code)
+      if (isDomestic || isStock) codes.add(code)
     }
   }
   return [...codes]

@@ -10,6 +10,8 @@ import type {
 } from '../types/asset'
 import { CATEGORY_COLORS, SCHEMA_VERSION, createDefaultCategories } from '../lib/defaults'
 import { collectCurrencies, collectFundCodes, fxExposure, isFund, safeNum, summarize } from '../lib/calc'
+/** 允许的行情代码：境内基金 6 位数字，或美股字母 / 港股数字 */
+const STOCK_CODE_RE = /^[A-Za-z][A-Za-z.\-]{0,5}$|^\d{1,5}$/
 import { loadPortfolio, savePortfolio } from '../lib/storage'
 import { describeRates, hasUsableRates, isFxStale, type CurrencyCode, type FxRates } from '../lib/currency'
 import type { HoldingMarket } from '../lib/usStock'
@@ -218,7 +220,7 @@ export function usePortfolio() {
   /** 拉取基金行情并回填 */
   const syncQuotes = useCallback(
     async (codes?: string[], opts: { silent?: boolean } = {}) => {
-      const list = (codes ?? fundCodes).filter((c) => /^\d{6}$/.test(c))
+      const list = (codes ?? fundCodes).filter((c) => /^\d{6}$/.test(c) || STOCK_CODE_RE.test(c))
       if (list.length === 0) return
       if (inFlight.current) return
       inFlight.current = true

@@ -99,7 +99,16 @@ function normalizeItem(raw: unknown): Portfolio['categories'][number]['items'][n
   const name = typeof o.name === 'string' && o.name ? o.name : '未命名'
 
   if (kind === 'fund') {
-    const code = typeof o.code === 'string' ? o.code.replace(/\D/g, '').slice(0, 6) : ''
+    /**
+     * 代码清洗必须区分市场：早期统一按「只留数字」处理，
+     * 会把 SPY / QQQ 这类美股字母代码清成空字符串，导致持仓永远拿不到行情。
+     */
+    const rawCode = typeof o.code === 'string' ? o.code.trim() : ''
+    const rawMarket = o.market === 'us' || o.market === 'hk' || o.market === 'cn' ? o.market : undefined
+    const code =
+      rawMarket === 'us'
+        ? rawCode.toUpperCase().replace(/[^A-Z.\-]/g, '').slice(0, 6)
+        : rawCode.replace(/\D/g, '').slice(0, 6)
     return {
       id,
       kind: 'fund',
