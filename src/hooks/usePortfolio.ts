@@ -12,6 +12,7 @@ import { CATEGORY_COLORS, SCHEMA_VERSION, createDefaultCategories } from '../lib
 import { collectCurrencies, collectFundCodes, fxExposure, isFund, safeNum, summarize } from '../lib/calc'
 import { loadPortfolio, savePortfolio } from '../lib/storage'
 import { describeRates, hasUsableRates, isFxStale, type CurrencyCode, type FxRates } from '../lib/currency'
+import type { HoldingMarket } from '../lib/usStock'
 import { fetchRates, loadCachedRates } from '../lib/fx'
 import { todayKey } from '../lib/format'
 import { uid } from '../lib/id'
@@ -90,6 +91,8 @@ function reducer(state: Portfolio, action: Action): Portfolio {
           nextItems[i] = {
             ...item,
             quote,
+            // 接口回填的市场写回条目，估值时据此选择币种
+            market: quote.market ?? item.market ?? 'cn',
             name: item.manualName ? item.name : quote.name || item.name,
           } as FundItem
           touched = true
@@ -375,6 +378,8 @@ export function makeFundItem(input: {
   id?: string
   name?: string
   code: string
+  /** 市场：决定计价币种（境内 CNY / 美股 USD / 港股 HKD） */
+  market?: HoldingMarket
   shares: number
   costNav: number
   note?: string
@@ -386,6 +391,7 @@ export function makeFundItem(input: {
     name: input.name?.trim() || input.code,
     note: input.note,
     code: input.code,
+    market: input.market ?? 'cn',
     shares: safeNum(input.shares),
     costNav: safeNum(input.costNav),
     quote: input.quote,

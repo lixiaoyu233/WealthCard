@@ -106,6 +106,8 @@ function normalizeItem(raw: unknown): Portfolio['categories'][number]['items'][n
       name,
       note: typeof o.note === 'string' ? o.note : undefined,
       code,
+      market:
+        o.market === 'us' || o.market === 'hk' || o.market === 'cn' ? o.market : undefined,
       shares: safeNum(o.shares),
       costNav: safeNum(o.costNav),
       manualName: o.manualName === true,

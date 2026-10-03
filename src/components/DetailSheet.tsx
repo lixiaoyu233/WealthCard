@@ -285,6 +285,7 @@ function ItemRow({
               <>
                 {item.code} · {formatQty(item.shares)} 份 · 成本 {formatNav(item.costNav)}
                 {liveNav !== undefined ? ` · 现价 ${formatNav(liveNav)}` : ''}
+                {v.currency !== 'CNY' ? ` · ${v.currency}` : ''}
               </>
             ) : item.kind === 'gold' ? (
               <>

@@ -31,10 +31,12 @@ export default function CategoryCard({ category, hidden, rates, onOpen }: Catego
     { profit: 0, cost: 0 },
   )
 
-  // 外币敞口：卡片上补一行「含外币 ¥xxx」并在汇率缺失时明确提示
+  /**
+   * 外币敞口：卡片上补一行「含外币 ¥xxx」，并在汇率缺失时明确提示。
+   * 基金/持仓类条目也要算进来 —— 美股按 USD、港股按 HKD，属于外币资产。
+   */
   const foreign = category.items.reduce(
     (acc, item) => {
-      if (isFund(item)) return acc
       const v = valuate(item, rates)
       if (v.currency === 'CNY') return acc
       acc.count += 1

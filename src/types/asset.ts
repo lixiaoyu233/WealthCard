@@ -2,6 +2,7 @@
 export type ItemKind = 'amount' | 'fund' | 'gold'
 
 import type { CurrencyCode } from '../lib/currency'
+import type { HoldingMarket } from '../lib/usStock'
 
 /** 基金归属的资产类型（与 calc.FUND_ASSET_CLASS_LABEL 对应） */
 export type FundAssetClass = 'equity' | 'bond' | 'money' | 'commodity' | 'mixed' | 'unknown'
@@ -36,8 +37,18 @@ export interface BaseItem {
 /** 基金条目：以真实基金代码 + 份额 + 成本单价登记 */
 export interface FundItem extends BaseItem {
   kind: 'fund'
-  /** 6 位基金代码 */
+  /**
+   * 代码：境内基金为 6 位数字；美股/港股为字母或 1~5 位数字。
+   * 由 market 字段决定如何解释。
+   */
   code: string
+  /**
+   * 持仓市场：
+   * - `cn`（默认，视为境内场外基金，走天天基金接口）
+   * - `us` 美股 / 美股 ETF（腾讯行情，USD 计价）
+   * - `hk` 港股（腾讯行情，HKD 计价）
+   */
+  market?: HoldingMarket
   /** 持有份额 */
   shares: number
   /** 成本单价（每份成本） */
@@ -87,6 +98,10 @@ export interface FundQuote {
   fetchedAt: number
   /** 数据来源，便于排查 */
   source: string
+  /** 行情所属市场（美股/港股时由接口回填，境内基金为 cn） */
+  market?: HoldingMarket
+  /** 行情计价币种（境内基金人民币、美股 USD、港股 HKD） */
+  currency?: CurrencyCode
 }
 
 /** 资产分类（卡片） */

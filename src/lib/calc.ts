@@ -10,6 +10,7 @@ import type {
   Summary,
 } from '../types/asset'
 import { type CurrencyCode, type FxRates, toCny } from './currency'
+import { HOLDING_MARKET_CURRENCY, type HoldingMarket } from './usStock'
 
 /* ------------------------------------------------------------------ *
  * 类型守卫
@@ -174,24 +175,43 @@ export function valuate(item: AssetItem, rates?: FxRates | null): ItemValuation 
   }
 
   if (isFund(item)) {
-    // 基金全部以人民币计价（境内基金净值），不接受其他币种
-    const code: CurrencyCode = 'CNY'
+    /**
+     * 基金/持仓的计价币种由市场决定：
+     * 境内基金是人民币净值；美股按 USD、港股按 HKD，再按汇率折算成人民币。
+     */
+    const market: HoldingMarket = item.market ?? 'cn'
+    const code: CurrencyCode = HOLDING_MARKET_CURRENCY[market] ?? 'CNY'
     const nav = fundCurrentNav(item)
     const shares = safeNum(item.shares)
     const costNav = safeNum(item.costNav)
+
+    // 成本也要按同一汇率折算，否则盈亏会被汇率放大或缩小
+    const convertCost = (costInCurrency: number) => {
+      const c = toCny(costInCurrency, code, rates)
+      return c === undefined ? costInCurrency : c
+    }
+
     if (nav === undefined) {
       // 尚未同步到行情时，用成本单价兜底，保证净资产不为 0 且不虚报盈亏
-      const fallback = shares * costNav
-      return { ...convert(fallback, code), cost: fallback, profit: 0, profitRate: 0 }
+      const fallbackInCurrency = shares * costNav
+      return {
+        ...convert(fallbackInCurrency, code),
+        cost: convertCost(fallbackInCurrency),
+        profit: 0,
+        profitRate: 0,
+      }
     }
-    const value = shares * nav
-    const cost = shares * costNav
-    const profit = value - cost
+
+    const valueInCurrency = shares * nav
+    const costInCurrency = shares * costNav
+    const valueCny = toCny(valueInCurrency, code, rates)
+    const costCny = convertCost(costInCurrency)
+    const profit = (valueCny === undefined ? valueInCurrency : valueCny) - costCny
     return {
-      ...convert(value, code),
-      cost,
+      ...convert(valueInCurrency, code),
+      cost: costCny,
       profit,
-      profitRate: cost > 0 ? profit / cost : 0,
+      profitRate: costCny > 0 ? profit / costCny : 0,
     }
   }
 
@@ -304,6 +324,7 @@ export function fxExposure(portfolio: Portfolio, rates?: FxRates | null): FxExpo
   for (const category of portfolio.categories) {
     for (const item of category.items) {
       const v = valuate(item, rates)
+      // 美股/港股持仓同样属于外币敞口
       if (v.currency === 'CNY') continue
       foreignItemCount += 1
       if (v.missingRate) missingRateCount += 1
@@ -318,12 +339,21 @@ export function fxExposure(portfolio: Portfolio, rates?: FxRates | null): FxExpo
   }
 }
 
-/** 收集组合里用到的币种（用于决定是否需要拉汇率） */
+/**
+ * 收集组合里用到的外币（用于决定是否需要拉汇率）。
+ *
+ * 注意：不能只看金额类条目 —— 美股/港股持仓的计价币种来自 market 字段
+ * （美股 USD、港股 HKD），漏掉它们会导致汇率不拉取、持仓折算不出来。
+ */
 export function collectCurrencies(portfolio: Portfolio): CurrencyCode[] {
   const set = new Set<CurrencyCode>()
   for (const category of portfolio.categories) {
     for (const item of category.items) {
-      if (isFund(item)) continue
+      if (isFund(item)) {
+        const market = item.market ?? 'cn'
+        if (market !== 'cn') set.add(HOLDING_MARKET_CURRENCY[market])
+        continue
+      }
       const code = (item as { currency?: CurrencyCode }).currency
       if (code && code !== 'CNY') set.add(code)
     }

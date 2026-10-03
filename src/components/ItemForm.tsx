@@ -3,6 +3,7 @@ import { Calculator, Loader2, RefreshCw, Trash2 } from 'lucide-react'
 import type { AssetItem, Category, FundQuote } from '../types/asset'
 import { CURRENCIES, type CurrencyCode, type FxRates, isCurrencyCode, scaleHint, toCny } from '../lib/currency'
 import { defaultItemKind, isFund, isGold, parseAmount } from '../lib/calc'
+import { HOLDING_MARKET_CURRENCY, detectStockMarket } from '../lib/usStock'
 import { formatCNY, formatNav, formatRate, formatSigned } from '../lib/format'
 import { makeAmountItem, makeFundItem, makeGoldItem } from '../hooks/usePortfolio'
 import { fetchFundQuotes } from '../lib/fundService'
@@ -110,7 +111,12 @@ const FIELD_META: Record<Exclude<PickerField, null>, FieldMeta> = {
 export default function ItemForm({ category, rates, initial, onSubmit, onDelete, onCancel }: ItemFormProps) {
   const editing = Boolean(initial)
   // 编辑时沿用原形态；新增时按分类推断（空分类也能正确给出基金/黄金表单）
-  const kind: AssetItem['kind'] = initial?.kind ?? defaultItemKind(category)
+  const [kind, setKind] = useState<AssetItem['kind']>(() => initial?.kind ?? defaultItemKind(category))
+  /**
+   * 是否允许在同一个分类里切换「金额 / 持仓」。
+   * 「股票」分类最典型：既能直接记一笔金额，也能登记美股/港股持仓自动同步。
+   */
+  const canPickKind = !editing && !/基金/.test(category.name) && /股票|证券/.test(category.name)
 
   const [name, setName] = useState(initial?.name ?? '')
   const [note, setNote] = useState(initial?.note ?? '')
@@ -137,6 +143,10 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
 
   const isFundKind = kind === 'fund'
   const isGoldKind = kind === 'gold'
+  /** 非纯基金分类时，代码可以是美股/港股 */
+  const allowStockCode = !/基金/.test(category.name)
+  /** 根据已输入的代码推断市场（美股/港股），用于币种提示与校验 */
+  const detectedMarket = allowStockCode ? detectStockMarket(code) : isFundKind ? 'cn' : null
 
   // 提示词：命中预设用预设，自定义分类给通用示例
   const preset = HINT_PRESETS.find((h) => h.match(category.id, category.name))
@@ -153,8 +163,9 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
   const validCode = /^\d{6}$/.test(code)
 
   const loadQuote = async (silent = false) => {
-    if (!validCode) {
-      if (!silent) setQuoteError('请输入 6 位基金代码')
+    const ok = allowStockCode ? code.trim().length >= 2 : validCode
+    if (!ok) {
+      if (!silent) setQuoteError(allowStockCode ? '请输入基金代码或美股/港股代码' : '请输入 6 位基金代码')
       return
     }
     setQuoteLoading(true)
@@ -178,8 +189,10 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
   }
 
   useEffect(() => {
-    if (!isFundKind || !validCode || editing) return
-    const timer = window.setTimeout(() => void loadQuote(true), 500)
+    // 境内基金要求 6 位数字；股票分类接受美股/港股代码
+    const ready = allowStockCode ? code.trim().length >= 2 : validCode
+    if (!isFundKind || !ready || editing) return
+    const timer = window.setTimeout(() => void loadQuote(true), 600)
     return () => window.clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code, isFundKind])
@@ -210,7 +223,15 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
     setError(null)
 
     if (isFundKind) {
-      if (!validCode) return setError('基金代码必须是 6 位数字')
+      // 境内基金要求 6 位数字；股票分类允许美股（SPY）与港股（00700）
+      const isMarketCode = allowStockCode && detectStockMarket(code) !== null
+      if (!validCode && !isMarketCode) {
+        return setError(
+          allowStockCode
+            ? '代码格式不对：境内基金填 6 位数字，美股/美股ETF 填字母代码（如 SPY、QQQ），港股填数字（如 00700）'
+            : '基金代码必须是 6 位数字',
+        )
+      }
       const s = parseAmount(shares)
       if (!Number.isFinite(s) || s <= 0) return setError('持有份额必须大于 0')
       const c = parseAmount(costNav)
@@ -220,6 +241,8 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
         // 用户没填名称、且自动查询还没回来时，退回基金全称 / 代码，避免出现无名条目
         name: name.trim() || quote?.name || code,
         code,
+        // 记录市场：决定计价币种（境内 CNY / 美股 USD / 港股 HKD）
+        market: quote?.market ?? detectedMarket ?? 'cn',
         shares: s,
         costNav: c,
         note: note.trim() || undefined,
@@ -269,7 +292,9 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
     const showScale = field === 'amount' || field === 'grams' || field === 'pricePerGram'
     return (
       <div>
-        <label className="field-label">{meta.label}</label>
+        <label className="field-label">
+          {field === 'costNav' && detectedMarket && detectedMarket !== 'cn' ? '成本单价（原币）' : meta.label}
+        </label>
         <div className="relative">
           <input
             value={value}
@@ -288,7 +313,7 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
           </button>
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-ink4">
-          {meta.unit ? <span>单位：{meta.unit}</span> : null}
+          {meta.unit ? <span>单位：{field === 'costNav' && detectedMarket ? (detectedMarket === 'us' ? 'USD/股' : detectedMarket === 'hk' ? 'HKD/股' : meta.unit) : meta.unit}</span> : null}
           {/* 量级提示：让用户一眼看出「最大那位是万还是十万」 */}
           {showScale && hint && hint.label !== '元' ? (
             <span className="rounded-full border border-line px-1.5 py-0.5 text-ink3">
@@ -344,19 +369,61 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
 
   return (
     <div className="space-y-3.5">
+      {/*
+        「股票」这类分类既可以直接记一笔金额，也可以登记美股/港股持仓。
+        不给切换的话，用户会以为这里只能填金额。
+      */}
+      {canPickKind ? (
+        <div>
+          <p className="field-label">记录方式</p>
+          <div className="grid grid-cols-2 gap-1 rounded-xl border border-line bg-s2 p-1">
+            {(
+              [
+                ['amount', '直接记金额'],
+                ['fund', '持仓（自动同步行情）'],
+              ] as Array<[AssetItem['kind'], string]>
+            ).map(([k, labelText]) => (
+              <button
+                key={k}
+                type="button"
+                data-testid={`kind-${k}`}
+                onClick={() => setKind(k)}
+                className={`rounded-lg py-2 text-[12.5px] transition ${
+                  kind === k ? 'bg-invert text-on-invert' : 'text-ink3 hover:text-ink1'
+                }`}
+              >
+                {labelText}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       {isFundKind ? (
         <div>
           <label className="field-label" htmlFor="fund-code">
-            基金代码（6 位数字，填完自动查净值）
+            {allowStockCode ? '代码（基金 6 位数字 / 美股字母 / 港股数字）' : '基金代码（6 位数字，填完自动查净值）'}
           </label>
           <div className="flex gap-2">
             <input
               id="fund-code"
               data-testid="fund-code"
               value={code}
-              onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              inputMode="numeric"
-              placeholder="如 161725 招商中证白酒"
+              onChange={(e) =>
+                setCode((() => {
+                  const raw = e.target.value
+                  // 境内基金分类只允许数字；股票分类允许字母与 . -
+                  if (!allowStockCode) return raw.replace(/\D/g, '').slice(0, 6)
+                  const cleaned = raw.replace(/[^A-Za-z0-9.\-]/g, '')
+                  // 纯数字按港股/境内基金处理，最长 6 位；字母代码转大写，最长 6 位
+                  return /^\d*$/.test(cleaned) ? cleaned.slice(0, 6) : cleaned.toUpperCase().slice(0, 6)
+                })())
+              }
+              inputMode={allowStockCode ? 'text' : 'numeric'}
+              autoCapitalize="characters"
+              autoCorrect="off"
+              spellCheck={false}
+              placeholder={allowStockCode ? '如 SPY / QQQ / 00700 / 161725' : '如 161725 招商中证白酒'}
               className="field-input flex-1 tabular-nums"
             />
             <button
@@ -370,11 +437,32 @@ export default function ItemForm({ category, rates, initial, onSubmit, onDelete,
             </button>
           </div>
           <p className="mt-1 text-[11px] leading-relaxed text-ink4">
-            输入 6 位代码即可，名称与净值会自动填入并持续同步（打开页面 / 每 5 分钟 / 右上角刷新）。
-            <br />
-            常用示例：161725 招商中证白酒、000001 华夏成长、510300 沪深300ETF
+            {allowStockCode ? (
+              <>
+                支持三类：境内基金（6 位数字，如 161725）、美股 / 美股 ETF（字母，如 SPY、QQQ）、港股（数字，如 00700）。
+                <br />
+                美股按 <span className="text-ink2">USD</span>、港股按 <span className="text-ink2">HKD</span>
+                计价，再用实时汇率折算成人民币。
+              </>
+            ) : (
+              <>
+                输入 6 位代码即可，名称与净值会自动填入并持续同步（打开页面 / 每 5 分钟 / 右上角刷新）。
+                <br />
+                常用示例：161725 招商中证白酒、000001 华夏成长、510300 沪深300ETF
+              </>
+            )}
           </p>
         </div>
+      ) : null}
+
+      {/* 识别到的市场提示：让用户确认代码被正确理解 */}
+      {isFundKind && detectedMarket && detectedMarket !== 'cn' ? (
+        <p className="flex items-center gap-1.5 text-[11.5px] tone-info" data-testid="market-hint">
+          <span className="rounded-full border px-1.5 py-0.5" style={{ borderColor: 'currentColor' }}>
+            {detectedMarket === 'us' ? '美股' : '港股'}
+          </span>
+          将按 {HOLDING_MARKET_CURRENCY[detectedMarket]} 计价，并用实时汇率折算成人民币
+        </p>
       ) : null}
 
       {/* 行情预览 */}

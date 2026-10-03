@@ -17,6 +17,11 @@
 
 import { JsonpError, jsonp } from './jsonp'
 import type { FundQuote } from '../types/asset'
+import {
+  detectStockMarket,
+  fetchTencentQuotes,
+  type StockMarket,
+} from './usStock'
 
 export interface FundQuoteResult {
   quote: FundQuote
@@ -24,7 +29,7 @@ export interface FundQuoteResult {
   source: QuoteSource
 }
 
-export type QuoteSource = 'fundmobapi' | 'fundmobapiJsonp' | 'push2' | 'fundgz'
+export type QuoteSource = 'fundmobapi' | 'fundmobapiJsonp' | 'push2' | 'fundgz' | 'tencent'
 
 export interface FundServiceOptions {
   /** 为 true 时把 JSONP 通道放在最前（默认先用 CORS fetch） */
@@ -123,6 +128,8 @@ export function parseFundMobBatch(payload: unknown): FundQuote[] {
         publishedAt: safeDateStr(row.PDATE),
         fetchedAt: now,
         source: 'fundmobapi',
+        market: 'cn',
+        currency: 'CNY',
       }
       if (!quote.publishedNav && !quote.estimatedNav) return null
       return quote
@@ -328,12 +335,45 @@ export async function fetchFundQuotes(
   options: FundServiceOptions = {},
 ): Promise<Map<string, FundQuoteResult>> {
   const { timeout = 12_000, preferJsonp = false } = options
-  const wanted = [...new Set(codes.map(trimCode).filter(isCode))]
+  const all = [...new Set(codes.map((c) => c.trim()).filter(Boolean))]
+
+  // 境内基金（6 位数字）走天天基金；美股/港股代码走腾讯行情
+  const wanted = all.filter(isCode)
+  const stockCodes = all.filter((c) => !isCode(c) && detectStockMarket(c) !== null)
+
   const result = new Map<string, FundQuoteResult>()
-  if (wanted.length === 0) return result
+
+  // 先把美股/港股取回来（含各自市场），失败的记入 attempts
+  const stockAttempts: Array<{ source: QuoteSource; error: string }> = []
+  if (stockCodes.length > 0) {
+    const groups: Record<StockMarket, string[]> = { us: [], hk: [] }
+    for (const c of stockCodes) {
+      const m = detectStockMarket(c)
+      if (m) groups[m].push(c)
+    }
+    for (const market of ['us', 'hk'] as StockMarket[]) {
+      if (groups[market].length === 0) continue
+      try {
+        const quotes = await fetchTencentQuotes(groups[market], market, timeout)
+        for (const q of quotes) result.set(q.code, { quote: q, source: 'tencent' })
+      } catch (e) {
+        stockAttempts.push({ source: 'tencent', error: `${market}: ${describeError(e)}` })
+      }
+    }
+  }
+
+  if (wanted.length === 0) {
+    if (result.size === 0 && stockAttempts.length > 0) {
+      throw new FundServiceError(
+        `所有行情通道均失败：${stockAttempts.map((a) => a.error).join('；')}`,
+        stockAttempts,
+      )
+    }
+    return result
+  }
 
   const order = options.providers ?? (preferJsonp ? JSONP_FIRST_ORDER : DEFAULT_ORDER)
-  const attempts: Array<{ source: QuoteSource; error: string }> = []
+  const attempts: Array<{ source: QuoteSource; error: string }> = [...stockAttempts]
   let remaining = wanted
 
   for (const source of order) {

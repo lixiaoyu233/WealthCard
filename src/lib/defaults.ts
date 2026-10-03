@@ -26,6 +26,8 @@ export function createDefaultCategories(): Category[] {
       icon: 'trending-up',
       color: accentVar('blue'),
       colorName: 'blue',
+      // 股票分类既可直接记金额，也可登记美股/港股持仓（表单里有切换）
+      defaultKind: 'amount',
       items: [],
     },
     {
