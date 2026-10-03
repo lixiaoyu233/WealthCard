@@ -1,17 +1,24 @@
 /** 资产条目形态 */
 export type ItemKind = 'amount' | 'fund' | 'gold'
 
+import type { CurrencyCode } from '../lib/currency'
+
 /** 基金归属的资产类型（与 calc.FUND_ASSET_CLASS_LABEL 对应） */
 export type FundAssetClass = 'equity' | 'bond' | 'money' | 'commodity' | 'mixed' | 'unknown'
 
-/** 币种（预留多币种展示，暂以 CNY 计价） */
+/** 币种（实际取值见 lib/currency.ts 的 CURRENCIES） */
 export type Currency = 'CNY'
 
 /** 金额形态条目（现金 / 房产 / 负债等直接录入金额的场景） */
 export interface AmountItem extends BaseItem {
   kind: 'amount'
-  /** 金额（可为负，负债通常以正数录入并由分类的 isLiability 扣减） */
+  /** 金额（可为负，负债通常以正数录入并由分类的 isLiability 扣减），以 currency 指定的币种计价 */
   amount: number
+  /**
+   * 币种，缺省视为人民币。
+   * 汇总时按实时汇率折算成人民币，因此总资产会随汇率变动。
+   */
+  currency?: CurrencyCode
 }
 
 export interface BaseItem {
@@ -51,8 +58,10 @@ export interface GoldItem extends BaseItem {
   kind: 'gold'
   /** 持有克数 */
   grams: number
-  /** 计价单价（元/克） */
+  /** 计价单价（每克），以 currency 指定的币种计价 */
   pricePerGram: number
+  /** 币种，缺省视为人民币 */
+  currency?: CurrencyCode
 }
 
 export type AssetItem = AmountItem | FundItem | GoldItem
@@ -125,7 +134,7 @@ export interface Summary {
 
 /** 单个条目的估值结果 */
 export interface ItemValuation {
-  /** 当前市值 */
+  /** 当前市值（人民币） */
   value: number
   /** 成本 */
   cost?: number
@@ -133,4 +142,13 @@ export interface ItemValuation {
   profit?: number
   /** 盈亏比例（小数） */
   profitRate?: number
+  /** 该条目使用的币种（基金恒为 CNY） */
+  currency: CurrencyCode
+  /** 原币市值（currency 为 CNY 时与 value 相同） */
+  valueInCurrency: number
+  /**
+   * 是否缺少汇率导致未能折算（true 时 value 退化为原币数值）。
+   * 界面需要据此提示「汇率不可用」，而不是悄悄给出错误的人民币金额。
+   */
+  missingRate: boolean
 }

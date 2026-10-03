@@ -24,6 +24,7 @@ import type {
   StrategySettings,
 } from '../types/strategy'
 import { categoryTotal, effectiveFundClass, fundClassToStrategyClasses, isFund, valuate } from './calc'
+import type { FxRates } from './currency'
 import {
   CATEGORY_KEYWORD_RULES,
   CLASS_EQUIVALENTS,
@@ -142,6 +143,8 @@ export interface AllocationInput {
   includeLiabilities: boolean
   /** 未映射分类的处理方式 */
   unmappedPolicy: 'auto' | 'ignore'
+  /** 汇率：用于把外币条目折算成人民币后再计算占比 */
+  rates?: FxRates | null
 }
 
 export interface AllocationResult {
@@ -161,7 +164,7 @@ export interface AllocationResult {
  * 基金持仓会按「资产类型」（名称识别 / 用户标记）细分到股票或债券。
  */
 export function computeAllocations(input: AllocationInput): AllocationResult {
-  const { portfolio, strategy, mapping, includeLiabilities, unmappedPolicy } = input
+  const { portfolio, strategy, mapping, includeLiabilities, unmappedPolicy, rates } = input
   const byClass: Record<string, number> = {}
   for (const c of strategy.classes) byClass[c.id] = 0
 
@@ -173,7 +176,7 @@ export function computeAllocations(input: AllocationInput): AllocationResult {
   const classIds = strategy.classes.map((c) => c.id)
 
   for (const category of portfolio.categories) {
-    const value = categoryTotal(category)
+    const value = categoryTotal(category, rates)
     if (isLiabilityCategory(category)) {
       // 负债按设置决定是否进入分母；无论哪种口径，都不参与买入/卖出的分配
       if (includeLiabilities) liabilityDeducted += Math.abs(value)
@@ -201,7 +204,7 @@ export function computeAllocations(input: AllocationInput): AllocationResult {
 
     if (usesFundSplit) {
       for (const item of fundItems) {
-        const v = valuate(item).value
+        const v = valuate(item, rates).value
         if (v === 0) continue
         const fundClass = effectiveFundClass(item)
         if (fundClass === 'unknown') unclassifiedItemCount += 1
@@ -258,6 +261,8 @@ export interface RebalanceOptions {
   includeLiabilities: boolean
   unmappedPolicy: 'auto' | 'ignore'
   mapping?: CategoryMapping
+  /** 汇率：外币条目按此折算 */
+  rates?: FxRates | null
 }
 
 /** 健康度分级：按总偏离率（Σ|偏离| / 2） */
@@ -293,10 +298,11 @@ export function computeRebalance(
     mapping: options.mapping,
     includeLiabilities: options.includeLiabilities,
     unmappedPolicy: options.unmappedPolicy,
+    rates: options.rates,
   })
 
   const total = allocation.total
-  const sellable = collectSellableItems(portfolio, strategy, options.mapping)
+  const sellable = collectSellableItems(portfolio, strategy, options.mapping, options.rates)
 
   const classes: ClassRebalance[] = strategy.classes.map((sc) => {
     const currentValue = allocation.byClass[sc.id] ?? 0
@@ -430,7 +436,12 @@ interface SellableItem {
  * 收集可减仓的持仓（基金，因为只有基金能按份额部分卖出），
  * 并按「基金的资产类型 + 分类映射」判断它落在哪个策略类别。
  */
-function collectSellableItems(portfolio: Portfolio, strategy: Strategy, mapping?: CategoryMapping): SellableItem[] {
+function collectSellableItems(
+  portfolio: Portfolio,
+  strategy: Strategy,
+  mapping?: CategoryMapping,
+  rates?: FxRates | null,
+): SellableItem[] {
   const classIds = strategy.classes.map((c) => c.id)
   const out: SellableItem[] = []
 
@@ -442,7 +453,7 @@ function collectSellableItems(portfolio: Portfolio, strategy: Strategy, mapping?
 
     for (const item of category.items) {
       if (!isFund(item)) continue
-      const v = valuate(item)
+      const v = valuate(item, rates)
       if (v.value <= 0) continue
 
       const fundClass = effectiveFundClass(item)
@@ -483,13 +494,18 @@ function buildSellCandidatesFor(classId: string, sellable: SellableItem[]): Sell
 }
 
 /** 便捷方法：按当前设置直接算一遍 */
-export function rebalanceWithSettings(portfolio: Portfolio, settings: StrategySettings): RebalanceResult {
+export function rebalanceWithSettings(
+  portfolio: Portfolio,
+  settings: StrategySettings,
+  rates?: FxRates | null,
+): RebalanceResult {
   const strategy = resolveStrategy(settings)
   return computeRebalance(portfolio, strategy, {
     threshold: settings.threshold,
     includeLiabilities: settings.includeLiabilities,
     unmappedPolicy: settings.unmappedPolicy,
     mapping: settings.mappings[strategy.id],
+    rates,
   })
 }
 

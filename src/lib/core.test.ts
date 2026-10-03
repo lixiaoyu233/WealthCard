@@ -282,8 +282,12 @@ describe('fundService 解析与 URL 构造（离线）', () => {
 
   it('默认分类符合需求定义', () => {
     const names = createDefaultCategories().map((c) => c.name)
-    expect(names).toEqual(['现金与固定资产', '股票', '基金', '黄金', '负债'])
+    expect(names).toEqual(['现金与固定资产', '股票', '基金', '黄金', '国债', '负债'])
     expect(createDefaultCategories().find((c) => c.name === '负债')?.isLiability).toBe(true)
+    // 国债用 landmark 图标，主题色为青色系
+    const bond = createDefaultCategories().find((c) => c.id === 'cat_bond')!
+    expect(bond.icon).toBe('landmark')
+    expect(bond.subtitle).toContain('国债')
   })
 })
 

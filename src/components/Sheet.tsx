@@ -65,7 +65,8 @@ export default function Sheet({
           rounded-t-[22px] border border-line bg-s1 shadow-[0_-8px_40px_-12px_rgba(0,0,0,0.95)]
           outline-none sm:rounded-[22px]`}
       >
-        <div className="flex items-start gap-3 border-b border-line px-5 py-4">
+        {/* 面板头部同样避开刘海，避免标题被状态栏压住 */}
+        <div className="safe-top flex items-start gap-3 border-b border-line px-5 pb-4">
           {leading}
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-[16px] font-semibold text-ink1">{title}</h2>

@@ -1,5 +1,6 @@
 import { ChevronRight, CreditCard, TrendingDown, TrendingUp } from 'lucide-react'
 import type { Category } from '../types/asset'
+import type { FxRates } from '../lib/currency'
 import { categoryCountLabel, categoryTotal, isFund, valuate } from '../lib/calc'
 import { formatCNY, formatRate } from '../lib/format'
 import { resolveIcon } from '../lib/icons'
@@ -7,6 +8,8 @@ import { resolveIcon } from '../lib/icons'
 interface CategoryCardProps {
   category: Category
   hidden?: boolean
+  /** 汇率：外币条目折算用 */
+  rates?: FxRates | null
   onOpen: (category: Category) => void
 }
 
@@ -14,18 +17,32 @@ interface CategoryCardProps {
  * 资产分类卡片：左侧彩色半透明图标 + 名称 + 副标题，右侧金额 + 项数标签。
  * 基金分类额外展示持仓盈亏（红涨绿跌）。
  */
-export default function CategoryCard({ category, hidden, onOpen }: CategoryCardProps) {
+export default function CategoryCard({ category, hidden, rates, onOpen }: CategoryCardProps) {
   const Icon = resolveIcon(category.icon)
-  const total = categoryTotal(category)
+  const total = categoryTotal(category, rates)
   const count = categoryCountLabel(category)
 
   // 基金分类的持仓盈亏合计
   const fundStats = category.items.filter(isFund).reduce(
     (acc, item) => {
-      const v = valuate(item)
+      const v = valuate(item, rates)
       return { profit: acc.profit + (v.profit ?? 0), cost: acc.cost + (v.cost ?? 0) }
     },
     { profit: 0, cost: 0 },
+  )
+
+  // 外币敞口：卡片上补一行「含外币 ¥xxx」并在汇率缺失时明确提示
+  const foreign = category.items.reduce(
+    (acc, item) => {
+      if (isFund(item)) return acc
+      const v = valuate(item, rates)
+      if (v.currency === 'CNY') return acc
+      acc.count += 1
+      acc.cny += v.value
+      if (v.missingRate) acc.missing = true
+      return acc
+    },
+    { count: 0, cny: 0, missing: false },
   )
   const hasFunds = category.items.some(isFund)
   const profitRate = fundStats.cost > 0 ? fundStats.profit / fundStats.cost : 0
@@ -70,6 +87,11 @@ export default function CategoryCard({ category, hidden, onOpen }: CategoryCardP
             {category.isLiability ? <CreditCard size={11} className="tone-danger/70" /> : null}
             <span className="chip">{count}</span>
           </span>
+          {foreign.count > 0 && !hidden ? (
+            <span className="mt-1 text-[10.5px] text-ink4">
+              {foreign.missing ? '含外币（汇率不可用）' : `含外币 ¥${formatCNY(foreign.cny, 0)}`}
+            </span>
+          ) : null}
         </div>
 
         <ChevronRight size={16} className="shrink-0 text-ink4 transition group-hover:text-ink4" />

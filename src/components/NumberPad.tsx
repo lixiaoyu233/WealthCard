@@ -1,4 +1,5 @@
 import { Delete, X } from 'lucide-react'
+import { scaleHintText } from '../lib/currency'
 
 interface NumberPadProps {
   open: boolean
@@ -12,6 +13,8 @@ interface NumberPadProps {
   onClose: () => void
   /** 快捷填入，如黄金常用克数 */
   quickValues?: Array<{ label: string; value: string }>
+  /** 币种代码，非人民币时在顶部标出，避免误读成人民币 */
+  currencyCode?: string
 }
 
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0'] as const
@@ -20,8 +23,21 @@ const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0'] as const
  * 自研数字键盘：移动端录入金额比系统键盘更快，
  * 并且规避了部分输入法把 '.' 替换成 '。' 的问题。
  */
-export default function NumberPad({ open, value, label, unit, onChange, onClose, quickValues }: NumberPadProps) {
+export default function NumberPad({
+  open,
+  value,
+  label,
+  unit,
+  onChange,
+  onClose,
+  quickValues,
+  currencyCode,
+}: NumberPadProps) {
   if (!open) return null
+
+  // 量级提示：把当前输入换算成数值后判断「最大一位是千/万/十万/百万」
+  const parsed = Number(value.replace(/,/g, ''))
+  const scale = Number.isFinite(parsed) && value !== '' ? scaleHintText(parsed) : '待输入'
 
   const press = (key: string) => {
     if (key === '.') {
@@ -54,8 +70,22 @@ export default function NumberPad({ open, value, label, unit, onChange, onClose,
         className="relative w-full max-w-[480px] animate-sheet-in overflow-hidden rounded-t-[22px] border border-line
           bg-s1 sm:rounded-[22px]"
       >
-        <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
-          <span className="text-[12px] text-ink4">{label}</span>
+        <div className="flex items-center justify-between border-b border-line px-4 py-2.5 pt-[max(env(safe-area-inset-top),10px)]">
+          <span className="flex items-center gap-1.5 text-[12px] text-ink4">
+            {label}
+            {/* 量级提示：直接告诉用户最大的那位是「万」还是「十万」 */}
+            <span
+              data-testid="numpad-scale"
+              className="rounded-full border border-line px-1.5 py-0.5 text-[10.5px] text-ink3"
+            >
+              {scale}
+            </span>
+            {currencyCode && currencyCode !== 'CNY' ? (
+              <span className="rounded-full border border-line px-1.5 py-0.5 text-[10.5px] tone-info">
+                {currencyCode}
+              </span>
+            ) : null}
+          </span>
           <div className="flex items-center gap-2">
             <span className="max-w-[210px] truncate text-right text-[20px] font-semibold tabular-nums text-ink1">
               {value || '0'}

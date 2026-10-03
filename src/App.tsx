@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Download, Plus, RotateCcw, ShieldCheck, TrendingDown, TrendingUp, TriangleAlert } from 'lucide-react'
 import type { AssetItem, Category } from './types/asset'
 import { usePortfolio } from './hooks/usePortfolio'
@@ -26,10 +26,13 @@ export default function App() {
   const {
     portfolio,
     summary,
+    exposure,
+    fx,
     fundCodes,
     sync,
     storageError,
     recovered,
+    addedCategories,
     dismissRecovered,
     syncQuotes,
     addCategory,
@@ -75,9 +78,16 @@ export default function App() {
 
   const categoryValues = useMemo(() => {
     const out: Record<string, number> = {}
-    for (const c of portfolio.categories) out[c.id] = categoryTotal(c)
+    for (const c of portfolio.categories) out[c.id] = categoryTotal(c, fx.rates)
     return out
-  }, [portfolio])
+  }, [portfolio, fx.rates])
+
+  // 版本升级提示：新增了内置分类（只提示一次）
+  useEffect(() => {
+    if (!addedCategories || addedCategories.length === 0) return
+    notify(`已新增「${addedCategories.join('」「')}」分类，可直接使用`, 'info')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const openCategory = useMemo(
     () => portfolio.categories.find((c) => c.id === openCategoryId) ?? null,
@@ -120,6 +130,8 @@ export default function App() {
       return
     }
     await syncQuotes(fundCodes)
+    // 顶部刷新按钮同时刷新汇率（有外币条目时才请求）
+    if (fx.hasForeign) await fx.sync({ force: true, silent: true })
     if (sync.lastError) return // 错误由 header 呈现
     notify('基金估值已更新', 'success')
   }, [fundCodes, notify, sync.lastError, syncQuotes])
@@ -173,7 +185,12 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-app">
-      <div className="mx-auto w-full max-w-[480px] px-4 pb-16">
+      {/*
+        顶部安全区：iOS「添加到主屏幕」后是 black-translucent 全屏模式，
+        内容会顶到状态栏下面，时间/信号压住标题、按钮也点不到。
+        这里用 safe-top 把内容推到刘海下方，同时保留沉浸式背景色。
+      */}
+      <div className="safe-top mx-auto w-full max-w-[480px] px-4 pb-16">
         {storageError ? (
           <div className="mt-4 flex items-start gap-2 rounded-2xl border border-warn/25 bg-warn/10 px-3.5 py-2.5 text-[12px] tone-warn">
             <TriangleAlert size={14} className="mt-0.5 shrink-0" />
@@ -205,7 +222,25 @@ export default function App() {
           themeMode={themeMode}
           onCycleTheme={cycleTheme}
           strategyStatus={{ text: statusLine(rebalance), level: rebalance.health }}
+          fx={{
+            hasForeign: exposure.foreignItemCount > 0,
+            loading: fx.loading,
+            stale: fx.stale,
+            sourceLabel: fx.sourceLabel,
+            currencies: exposure.byCurrency.map((b) => b.currency),
+          }}
         />
+
+        {/* 汇率缺失时明确提示，避免把原币数字误当成人民币 */}
+        {exposure.missingRateCount > 0 ? (
+          <div className="notice-warn mt-3">
+            <TriangleAlert size={14} className="mt-0.5 shrink-0" />
+            <span>
+              有 {exposure.missingRateCount} 条外币资产暂时拿不到汇率，已按原币数值计入，
+              金额可能偏大。请检查网络后点右上角刷新。
+            </span>
+          </div>
+        ) : null}
 
         {/* 分区标题 */}
         <div className="mt-7 flex items-end justify-between px-1">
@@ -231,6 +266,7 @@ export default function App() {
               key={category.id}
               category={category}
               hidden={hidden}
+              rates={fx.rates}
               onOpen={(c) => setOpenCategoryId(c.id)}
             />
           ))}
@@ -325,6 +361,7 @@ export default function App() {
         index={portfolio.categories.findIndex((c) => c.id === openCategoryId)}
         total={portfolio.categories.length}
         syncing={sync.loading}
+        rates={fx.rates}
         onClose={() => setOpenCategoryId(null)}
         onAddItem={handleAddItem}
         onUpdateItem={(categoryId, item) => {

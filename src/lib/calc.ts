@@ -8,6 +8,7 @@ import type {
   Portfolio,
   Summary,
 } from '../types/asset'
+import { type CurrencyCode, type FxRates, toCny } from './currency'
 
 /* ------------------------------------------------------------------ *
  * 类型守卫
@@ -149,22 +150,44 @@ export function fundCurrentNav(item: FundItem): number | undefined {
   return undefined
 }
 
-/** 单个条目的市值 / 成本 / 盈亏 */
-export function valuate(item: AssetItem): ItemValuation {
+/**
+ * 单个条目的市值 / 成本 / 盈亏。
+ *
+ * 多币种口径：条目金额以原币存储，这里按传入的汇率折算成人民币。
+ * 汇率缺失时**不静默当成 0**，而是把原币数值当作人民币返回并标记 missingRate，
+ * 由界面提示「汇率不可用」，避免用户把错数字当成真资产。
+ */
+export function valuate(item: AssetItem, rates?: FxRates | null): ItemValuation {
+  /** 把原币金额换成本币（人民币），并给出折算元信息 */
+  const convert = (amountInCurrency: number, code: CurrencyCode): Pick<ItemValuation, 'value' | 'valueInCurrency' | 'currency' | 'missingRate'> => {
+    const converted = toCny(amountInCurrency, code, rates)
+    if (converted === undefined) {
+      return {
+        value: amountInCurrency,
+        valueInCurrency: amountInCurrency,
+        currency: code,
+        missingRate: code !== 'CNY',
+      }
+    }
+    return { value: converted, valueInCurrency: amountInCurrency, currency: code, missingRate: false }
+  }
+
   if (isFund(item)) {
+    // 基金全部以人民币计价（境内基金净值），不接受其他币种
+    const code: CurrencyCode = 'CNY'
     const nav = fundCurrentNav(item)
     const shares = safeNum(item.shares)
     const costNav = safeNum(item.costNav)
     if (nav === undefined) {
       // 尚未同步到行情时，用成本单价兜底，保证净资产不为 0 且不虚报盈亏
       const fallback = shares * costNav
-      return { value: fallback, cost: fallback, profit: 0, profitRate: 0 }
+      return { ...convert(fallback, code), cost: fallback, profit: 0, profitRate: 0 }
     }
     const value = shares * nav
     const cost = shares * costNav
     const profit = value - cost
     return {
-      value,
+      ...convert(value, code),
       cost,
       profit,
       profitRate: cost > 0 ? profit / cost : 0,
@@ -172,20 +195,34 @@ export function valuate(item: AssetItem): ItemValuation {
   }
 
   if (isGold(item)) {
+    const code = item.currency ?? 'CNY'
     const grams = safeNum(item.grams)
     const price = safeNum(item.pricePerGram)
-    const value = grams * price
-    // 黄金只登记当前单价，没有独立成本价时以现价为成本（盈亏 0）
-    return { value, cost: value, profit: 0, profitRate: 0 }
+    const valueInCurrency = grams * price
+    const converted = toCny(valueInCurrency, code, rates)
+    // 黄金只登记当前单价，没有独立成本价时以现价为成本（盈亏 0）。
+    // 成本同样折算，保证盈亏在两个币种口径下都自洽。
+    const costCny = converted === undefined ? valueInCurrency : converted
+    return {
+      ...convert(valueInCurrency, code),
+      cost: costCny,
+      profit: 0,
+      profitRate: 0,
+    }
   }
 
-  const amount = safeNum(item.amount)
-  return { value: amount, cost: undefined, profit: undefined, profitRate: undefined }
+  const code = item.currency ?? 'CNY'
+  return {
+    ...convert(safeNum(item.amount), code),
+    cost: undefined,
+    profit: undefined,
+    profitRate: undefined,
+  }
 }
 
-/** 分类小计（负债类金额本身以负数存储，直接累加） */
-export function categoryTotal(category: Category): number {
-  return category.items.reduce((sum, item) => sum + valuate(item).value, 0)
+/** 分类小计（人民币口径；负债类金额本身以负数存储，直接累加） */
+export function categoryTotal(category: Category, rates?: FxRates | null): number {
+  return category.items.reduce((sum, item) => sum + valuate(item, rates).value, 0)
 }
 
 /** 分类项数标签文案，如「3项」「1只」「1笔」 */
@@ -208,12 +245,12 @@ export function categoryCountLabel(category: Category): string {
  * - 其余分类按正负号计入 totalAssets（金额为正视为资产，为负则抵减资产）；
  * - 净资产 = 总资产 − 总负债。
  */
-export function summarize(portfolio: Portfolio): Summary {
+export function summarize(portfolio: Portfolio, rates?: FxRates | null): Summary {
   let assets = 0
   let liabilities = 0
 
   for (const category of portfolio.categories) {
-    const subtotal = categoryTotal(category)
+    const subtotal = categoryTotal(category, rates)
     if (category.isLiability) {
       liabilities += Math.abs(subtotal)
     } else {
@@ -226,6 +263,53 @@ export function summarize(portfolio: Portfolio): Summary {
     totalAssets: assets,
     totalLiabilities: liabilities,
   }
+}
+
+/**
+ * 外币敞口统计：供界面提示「其中含外币资产」以及「有 N 条因缺少汇率未能折算」。
+ */
+export interface FxExposure {
+  /** 有外币计价的条目数 */
+  foreignItemCount: number
+  /** 因缺少汇率而未能折算成人民币的条目数 */
+  missingRateCount: number
+  /** 按币种汇总的原币金额（便于展示「约合」） */
+  byCurrency: Array<{ currency: CurrencyCode; valueInCurrency: number }>
+}
+
+export function fxExposure(portfolio: Portfolio, rates?: FxRates | null): FxExposure {
+  const byCurrency = new Map<CurrencyCode, number>()
+  let foreignItemCount = 0
+  let missingRateCount = 0
+
+  for (const category of portfolio.categories) {
+    for (const item of category.items) {
+      const v = valuate(item, rates)
+      if (v.currency === 'CNY') continue
+      foreignItemCount += 1
+      if (v.missingRate) missingRateCount += 1
+      byCurrency.set(v.currency, (byCurrency.get(v.currency) ?? 0) + v.valueInCurrency)
+    }
+  }
+
+  return {
+    foreignItemCount,
+    missingRateCount,
+    byCurrency: [...byCurrency.entries()].map(([currency, valueInCurrency]) => ({ currency, valueInCurrency })),
+  }
+}
+
+/** 收集组合里用到的币种（用于决定是否需要拉汇率） */
+export function collectCurrencies(portfolio: Portfolio): CurrencyCode[] {
+  const set = new Set<CurrencyCode>()
+  for (const category of portfolio.categories) {
+    for (const item of category.items) {
+      if (isFund(item)) continue
+      const code = (item as { currency?: CurrencyCode }).currency
+      if (code && code !== 'CNY') set.add(code)
+    }
+  }
+  return [...set]
 }
 
 /** 分类内是否含有需要联网刷新行情的条目 */

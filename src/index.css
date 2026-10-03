@@ -302,6 +302,17 @@
     padding-bottom: max(env(safe-area-inset-bottom), 0.5rem);
   }
 
+  /*
+    顶部安全区。
+    普通 Safari 里 env(safe-area-inset-top) 为 0，只留一点基础内边距；
+    独立窗口模式（添加到主屏幕）下会自动拿到刘海/状态栏高度，
+    保证标题与右上角按钮既不被遮挡、也能正常点按。
+    额外加 8px 是为了让「状态栏文字」和「标题」之间留出呼吸空间。
+  */
+  .safe-top {
+    padding-top: calc(env(safe-area-inset-top, 0px) + 8px);
+  }
+
   .no-scrollbar::-webkit-scrollbar {
     display: none;
   }

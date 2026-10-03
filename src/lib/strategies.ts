@@ -104,6 +104,8 @@ export const DEFAULT_MAPPINGS: Record<StrategyId, Record<string, MappingEntry[]>
     // 基金默认当作股票，债券型基金会按名称/用户标记自动归到中期国债
     cat_fund: single('stock'),
     cat_gold: single('gold'),
+    // 国债：全天候里对应中期国债（长期国债单独占 40%，储蓄国债更接近中期）
+    cat_bond: single('bond-mid'),
     cat_debt: single('bond-mid'),
   },
   permanent: {
@@ -111,6 +113,7 @@ export const DEFAULT_MAPPINGS: Record<StrategyId, Record<string, MappingEntry[]>
     cat_stock: single('stock'),
     cat_fund: single('stock'),
     cat_gold: single('gold'),
+    cat_bond: single('bond-long'),
     cat_debt: single('bond-long'),
   },
   'classic-60-40': {
@@ -118,6 +121,7 @@ export const DEFAULT_MAPPINGS: Record<StrategyId, Record<string, MappingEntry[]>
     cat_stock: single('stock'),
     cat_fund: single('stock'),
     cat_gold: single('stock'),
+    cat_bond: single('bond'),
     cat_debt: single('bond'),
   },
 }
@@ -126,7 +130,7 @@ export const DEFAULT_MAPPINGS: Record<StrategyId, Record<string, MappingEntry[]>
 export const CATEGORY_KEYWORD_RULES: Array<{ match: RegExp; classIds: string[] }> = [
   { match: /(现金|存款|货币|银行|活期|余额宝)/, classIds: ['cash', 'bond', 'bond-mid'] },
   { match: /(股|权益|指数|ETF)/i, classIds: ['stock'] },
-  { match: /(债|固收|国债)/, classIds: ['bond', 'bond-long', 'bond-mid'] },
+  { match: /(国债|债券|固收)/, classIds: ['bond', 'bond-long', 'bond-mid'] },
   { match: /(黄金|金|贵金属)/, classIds: ['gold'] },
   { match: /(商品|大宗|原油|农产品)/, classIds: ['commodity'] },
   { match: /(房|地产|不动产|车)/, classIds: ['stock', 'commodity'] },

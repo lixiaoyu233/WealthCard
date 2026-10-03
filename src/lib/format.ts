@@ -1,3 +1,5 @@
+import { currencyMeta, isCurrencyCode } from './currency'
+
 /** 展示层数字格式化工具，全部为纯函数，便于单测 */
 
 /** 千分位 + 指定小数位 */
@@ -83,4 +85,44 @@ export function todayKey(d = new Date()): string {
 export function toneClass(value: number | undefined): string {
   if (value === undefined || !Number.isFinite(value) || value === 0) return 'text-zinc-400'
   return value > 0 ? 'text-up' : 'text-down'
+}
+
+/* ------------------------------------------------------------------ *
+ * 多币种展示
+ * ------------------------------------------------------------------ */
+
+export interface MoneyDisplay {
+  /** 主显示：原币金额（人民币条目就是人民币金额） */
+  primary: string
+  /** 副显示：外币条目的折算人民币，人民币条目为 null */
+  secondary: string | null
+  /** 是否是外币条目 */
+  isForeign: boolean
+}
+
+/**
+ * 统一的金额展示：
+ * - 人民币条目：主显示就是千分位金额，没有副行；
+ * - 外币条目：主显示带币种符号的原币金额，副行显示折算后的人民币。
+ *
+ * 传入的 cnyValue 已经是折算结果；若 missingRate 为 true，说明汇率缺失，
+ * 此时副行给出明确提示而不是显示一个错误的数字。
+ */
+export function moneyDisplay(
+  valueInCurrency: number,
+  currency: string,
+  cnyValue: number,
+  missingRate: boolean,
+): MoneyDisplay {
+  if (currency === 'CNY') {
+    return { primary: formatNumber(valueInCurrency, 2), secondary: null, isForeign: false }
+  }
+  const meta = isCurrencyCode(currency) ? currencyMeta(currency) : null
+  const decimals = meta?.decimals ?? 2
+  const symbol = meta?.symbol ?? ''
+  return {
+    primary: `${symbol}${formatNumber(valueInCurrency, decimals)}`,
+    secondary: missingRate ? '汇率不可用' : `≈ ¥${formatNumber(cnyValue, 2)}`,
+    isForeign: true,
+  }
 }

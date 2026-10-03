@@ -9,8 +9,10 @@ import type {
   Portfolio,
 } from '../types/asset'
 import { CATEGORY_COLORS, SCHEMA_VERSION, createDefaultCategories } from '../lib/defaults'
-import { collectFundCodes, isFund, safeNum, summarize } from '../lib/calc'
+import { collectCurrencies, collectFundCodes, fxExposure, isFund, safeNum, summarize } from '../lib/calc'
 import { loadPortfolio, savePortfolio } from '../lib/storage'
+import { describeRates, hasUsableRates, isFxStale, type CurrencyCode, type FxRates } from '../lib/currency'
+import { fetchRates, loadCachedRates } from '../lib/fx'
 import { todayKey } from '../lib/format'
 import { uid } from '../lib/id'
 import { FundServiceError, fetchFundQuotes } from '../lib/fundService'
@@ -121,13 +123,26 @@ export interface SyncState {
 
 const initialLoad = loadPortfolio()
 
+/**
+ * 组合状态与持久化，并统一负责汇率。
+ *
+ * 汇率放在这里而不是单独的 hook：汇率要参与汇总与快照，
+ * 而汇率又需要「组合里有哪些外币」这一信息，放一起可以避免两个 hook 互相依赖。
+ */
 export function usePortfolio() {
   const [portfolio, dispatch] = useReducer(reducer, initialLoad.portfolio)
   const [storageError, setStorageError] = useState<string | null>(initialLoad.error ?? null)
   const [recovered, setRecovered] = useState(initialLoad.recovered)
+  const [addedCategories] = useState<string[] | undefined>(initialLoad.addedCategories)
   const [sync, setSync] = useState<SyncState>({ loading: false })
   const bootstrapped = useRef(false)
   const inFlight = useRef(false)
+
+  /* ---------- 汇率状态（外币条目折算用） ---------- */
+  const [rates, setRates] = useState<FxRates | null>(() => loadCachedRates())
+  const [fxLoading, setFxLoading] = useState(false)
+  const [fxError, setFxError] = useState<string | undefined>()
+  const fxInFlight = useRef(false)
 
   /* ---------- 持久化：任何变更都写入 localStorage ---------- */
   useEffect(() => {
@@ -135,23 +150,57 @@ export function usePortfolio() {
     if (err) setStorageError(err)
   }, [portfolio])
 
-  const summary = useMemo(() => summarize(portfolio), [portfolio])
+  const foreignCurrencies = useMemo(() => collectCurrencies(portfolio), [portfolio])
+  const hasForeign = foreignCurrencies.length > 0
+  /** 汇率是否可用于折算：人民币组合恒为可用 */
+  const fxReady = !hasForeign || hasUsableRates(rates)
+
+  const summary = useMemo(() => summarize(portfolio, rates), [portfolio, rates])
+  const exposure = useMemo(() => fxExposure(portfolio, rates), [portfolio, rates])
   const fundCodes = useMemo(() => collectFundCodes(portfolio), [portfolio])
 
-  /** 记录当日净资产快照，用于「较上次」变化提示 */
-  const takeSnapshot = useCallback((p: Portfolio) => {
-    const s = summarize(p)
-    dispatch({
-      type: 'snapshot',
-      point: {
-        date: todayKey(),
-        netWorth: s.netWorth,
-        totalAssets: s.totalAssets,
-        totalLiabilities: s.totalLiabilities,
-        at: Date.now(),
-      },
-    })
+  /** 拉取汇率（缓存未过期时默认跳过） */
+  const syncFx = useCallback(async (opts: { force?: boolean; silent?: boolean } = {}) => {
+    if (fxInFlight.current) return
+    fxInFlight.current = true
+    if (!opts.silent) setFxLoading(true)
+    try {
+      const result = await fetchRates({ force: opts.force, skipIfFresh: !opts.force })
+      setRates(result.rates)
+      setFxError(result.error)
+    } catch (e) {
+      setFxError(e instanceof Error ? e.message : '汇率获取失败')
+    } finally {
+      fxInFlight.current = false
+      setFxLoading(false)
+    }
   }, [])
+
+  /** 首屏：有外币且汇率过期（>24h）时才联网 */
+  useEffect(() => {
+    if (!hasForeign) return
+    if (hasUsableRates(rates) && !isFxStale(rates)) return
+    void syncFx({ silent: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasForeign])
+
+  /** 记录当日净资产快照，用于「较上次」变化提示 */
+  const takeSnapshot = useCallback(
+    (p: Portfolio) => {
+      const s = summarize(p, rates)
+      dispatch({
+        type: 'snapshot',
+        point: {
+          date: todayKey(),
+          netWorth: s.netWorth,
+          totalAssets: s.totalAssets,
+          totalLiabilities: s.totalLiabilities,
+          at: Date.now(),
+        },
+      })
+    },
+    [rates],
+  )
 
   /** 拉取基金行情并回填 */
   const syncQuotes = useCallback(
@@ -204,12 +253,14 @@ export function usePortfolio() {
     return () => window.clearInterval(timer)
   }, [fundCodes, syncQuotes])
 
-  /** 记录快照（净资产变化时） */
+  /** 记录快照（净资产变化时）。汇率未就绪时跳过，避免把未折算的数字写进历史 */
   useEffect(() => {
+    // 汇率未就绪时写入的快照会把外币按原币数值记账，等折算完成再写
+    if (!fxReady) return
     const timer = window.setTimeout(() => takeSnapshot(portfolio), 1200)
     return () => window.clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [summary.netWorth])
+  }, [summary.netWorth, fxReady])
 
   /* ---------- 分类操作 ---------- */
   const addCategory = useCallback((patch?: Partial<Category>) => {
@@ -258,10 +309,26 @@ export function usePortfolio() {
   return {
     portfolio,
     summary,
+    /** 外币敞口统计（条数 / 未折算条数 / 各币种原币合计） */
+    exposure,
     fundCodes,
+    /** 汇率状态：供界面标注来源与日期 */
+    fx: {
+      rates,
+      loading: fxLoading,
+      stale: isFxStale(rates),
+      ready: fxReady,
+      error: fxError,
+      hasForeign,
+      currencies: foreignCurrencies,
+      sourceLabel: hasUsableRates(rates) ? describeRates(rates) : '暂无汇率',
+      sync: syncFx,
+    },
     sync,
     storageError,
     recovered,
+    /** 版本升级时自动补上的内置分类（如「国债」） */
+    addedCategories,
     dismissRecovered: () => setRecovered(false),
     syncQuotes,
     addCategory,
@@ -277,8 +344,21 @@ export function usePortfolio() {
 }
 
 /** 表单提交时构造条目；金额与份额的数值解析在表单层完成 */
-export function makeAmountItem(input: { name: string; note?: string; amount: number }): AssetItem {
-  return { id: uid('item'), kind: 'amount', name: input.name, note: input.note, amount: safeNum(input.amount) }
+export function makeAmountItem(input: {
+  name: string
+  note?: string
+  amount: number
+  currency?: CurrencyCode
+}): AssetItem {
+  return {
+    id: uid('item'),
+    kind: 'amount',
+    name: input.name,
+    note: input.note,
+    amount: safeNum(input.amount),
+    // 人民币是默认值，不落库，保持数据干净
+    currency: input.currency && input.currency !== 'CNY' ? input.currency : undefined,
+  }
 }
 
 export function makeFundItem(input: {
@@ -308,6 +388,7 @@ export function makeGoldItem(input: {
   grams: number
   pricePerGram: number
   note?: string
+  currency?: CurrencyCode
 }): GoldItem {
   return {
     id: input.id ?? uid('gold'),
@@ -316,5 +397,6 @@ export function makeGoldItem(input: {
     note: input.note,
     grams: safeNum(input.grams),
     pricePerGram: safeNum(input.pricePerGram),
+    currency: input.currency && input.currency !== 'CNY' ? input.currency : undefined,
   }
 }

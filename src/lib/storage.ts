@@ -1,5 +1,6 @@
 import type { HistoryPoint, Portfolio } from '../types/asset'
-import { SCHEMA_VERSION, createDefaultCategories, createEmptyPortfolio } from './defaults'
+import { SCHEMA_VERSION, createDefaultCategories, createEmptyPortfolio, mergeDefaultCategories } from './defaults'
+import { isCurrencyCode } from './currency'
 import { safeNum } from './calc'
 
 // 键名刻意保留早期前缀（项目曾用名 asset-card-wallet）：改名不迁移数据，老用户无感
@@ -11,6 +12,8 @@ export interface StorageResult {
   portfolio: Portfolio
   /** 是否从损坏数据中恢复（用于给用户提示） */
   recovered: boolean
+  /** 版本升级时自动补上的内置分类名称（用于一次性提示） */
+  addedCategories?: string[]
   error?: string
 }
 
@@ -106,6 +109,11 @@ function normalizeItem(raw: unknown): Portfolio['categories'][number]['items'][n
     }
   }
 
+  // 币种只接受白名单内的取值；非法/缺失一律回落人民币，保证旧数据兼容
+  const currency = typeof o.currency === 'string' && o.currency !== 'CNY' && isCurrencyCode(o.currency)
+    ? o.currency
+    : undefined
+
   if (kind === 'gold') {
     return {
       id,
@@ -114,6 +122,7 @@ function normalizeItem(raw: unknown): Portfolio['categories'][number]['items'][n
       note: typeof o.note === 'string' ? o.note : undefined,
       grams: safeNum(o.grams),
       pricePerGram: safeNum(o.pricePerGram),
+      currency,
     }
   }
 
@@ -123,6 +132,7 @@ function normalizeItem(raw: unknown): Portfolio['categories'][number]['items'][n
     name,
     note: typeof o.note === 'string' ? o.note : undefined,
     amount: safeNum(o.amount),
+    currency,
   }
 }
 
@@ -154,7 +164,17 @@ export function loadPortfolio(): StorageResult {
     const raw = window.localStorage.getItem(STORAGE_KEY)
     if (raw) {
       const parsed = normalizePortfolio(JSON.parse(raw))
-      if (parsed) return { portfolio: parsed, recovered: false }
+      if (parsed) {
+        // 升级兼容：补上后来新增的内置分类（如「国债」）
+        const merged = mergeDefaultCategories(parsed.categories)
+        const addedNames = merged.added
+          .map((id) => merged.categories.find((c) => c.id === id)?.name ?? id)
+        return {
+          portfolio: { ...parsed, categories: merged.categories },
+          recovered: false,
+          addedCategories: addedNames.length > 0 ? addedNames : undefined,
+        }
+      }
       return { portfolio: createEmptyPortfolio(), recovered: true, error: '本地数据格式异常，已重置为默认分类' }
     }
     // 迁移旧键

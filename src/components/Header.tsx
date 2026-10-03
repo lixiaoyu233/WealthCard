@@ -21,6 +21,14 @@ interface HeaderProps {
     text: string
     level: 'healthy' | 'watch' | 'warning' | 'critical'
   }
+  /** 汇率状态：有外币条目时才展示 */
+  fx?: {
+    hasForeign: boolean
+    loading: boolean
+    stale: boolean
+    sourceLabel: string
+    currencies: string[]
+  }
 }
 
 /** 组合健康度对应的状态点配色 */
@@ -47,6 +55,7 @@ export default function Header({
   themeMode,
   onCycleTheme,
   strategyStatus,
+  fx,
 }: HeaderProps) {
   const { netWorth, totalAssets, totalLiabilities } = summary
 
@@ -141,6 +150,16 @@ export default function Header({
           </p>
         ) : null}
       </div>
+
+      {fx?.hasForeign ? (
+        <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-ink4">
+          <span>
+            外币资产（{fx.currencies.join(' / ')}）按实时汇率折算
+            {fx.loading ? ' · 更新中…' : ` · ${fx.sourceLabel}`}
+          </span>
+          {fx.stale && !fx.loading ? <span className="tone-warn">汇率可能过期，点右上角刷新</span> : null}
+        </p>
+      ) : null}
 
       <div className="mt-3 flex min-h-[16px] items-center gap-2 text-[11px]">
         {syncing ? (

@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { ArrowLeft, ArrowDown, ArrowUp, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import type { AssetItem, Category, HistoryPoint } from '../types/asset'
+import type { FxRates } from '../lib/currency'
 import { categoryTotal, isFund, valuate } from '../lib/calc'
-import { formatCNY, formatNav, formatQty, formatRate, formatRelative, formatSigned } from '../lib/format'
+import { formatCNY, formatNav, formatQty, formatRate, formatRelative, formatSigned, moneyDisplay } from '../lib/format'
 import { resolveIcon } from '../lib/icons'
 import Sheet from './Sheet'
 import ItemForm from './ItemForm'
@@ -15,6 +16,8 @@ interface DetailSheetProps {
   total?: number
   syncing?: boolean
   history?: HistoryPoint[]
+  /** 汇率：外币条目折算用 */
+  rates?: FxRates | null
   onClose: () => void
   onAddItem: (categoryId: string, item: AssetItem) => void
   onUpdateItem: (categoryId: string, item: AssetItem) => void
@@ -33,6 +36,7 @@ export default function DetailSheet({
   index = 0,
   total = 1,
   syncing,
+  rates,
   onClose,
   onAddItem,
   onUpdateItem,
@@ -55,7 +59,7 @@ export default function DetailSheet({
   if (!category) return null
 
   const Icon = resolveIcon(category.icon)
-  const subtotal = categoryTotal(category)
+  const subtotal = categoryTotal(category, rates)
   const displayTotal = category.isLiability ? -Math.abs(subtotal) : subtotal
   const hasFunds = category.items.some(isFund)
 
@@ -159,6 +163,7 @@ export default function DetailSheet({
                   <ItemRow
                     key={item.id}
                     item={item}
+                    rates={rates}
                     onEdit={() => setMode({ view: 'form', initial: item })}
                     onDelete={() => setPendingDelete({ type: 'item', item })}
                   />
@@ -209,6 +214,7 @@ export default function DetailSheet({
         ) : (
           <ItemForm
             category={category}
+            rates={rates}
             initial={mode.initial}
             onSubmit={handleSubmit}
             onDelete={
@@ -239,8 +245,19 @@ export default function DetailSheet({
 
 /* ------------------------------------------------------------------ */
 
-function ItemRow({ item, onEdit, onDelete }: { item: AssetItem; onEdit: () => void; onDelete: () => void }) {
-  const v = valuate(item)
+function ItemRow({
+  item,
+  rates,
+  onEdit,
+  onDelete,
+}: {
+  item: AssetItem
+  rates?: FxRates | null
+  onEdit: () => void
+  onDelete: () => void
+}) {
+  const v = valuate(item, rates)
+  const money = moneyDisplay(v.valueInCurrency, v.currency, v.value, v.missingRate)
   const fund = isFund(item)
   const quote = fund ? item.quote : undefined
   const liveNav = quote?.estimatedNav ?? quote?.publishedNav
@@ -258,16 +275,25 @@ function ItemRow({ item, onEdit, onDelete }: { item: AssetItem; onEdit: () => vo
               </>
             ) : item.kind === 'gold' ? (
               <>
-                {formatQty(item.grams)} 克 · {formatCNY(item.pricePerGram)} 元/克
+                {formatQty(item.grams)} 克 · {moneyDisplay(item.pricePerGram, v.currency, item.pricePerGram, false).primary}
+                /克{v.currency !== 'CNY' ? ` · ${v.currency}` : ''}
               </>
             ) : (
-              (item.note ?? '')
+              <>
+                {v.currency !== 'CNY' ? `${v.currency} · ` : ''}
+                {item.note ?? ''}
+              </>
             )}
           </p>
         </button>
 
         <button type="button" onClick={onEdit} className="shrink-0 text-right">
-          <p className="text-[14.5px] font-medium tabular-nums text-ink1">{formatCNY(v.value)}</p>
+          <p className="text-[14.5px] font-medium tabular-nums text-ink1">{money.primary}</p>
+          {money.secondary ? (
+            <p className={`mt-0.5 text-[10.5px] tabular-nums ${v.missingRate ? 'tone-warn' : 'text-ink4'}`}>
+              {money.secondary}
+            </p>
+          ) : null}
           {fund && v.profit !== undefined ? (
             <p className={`mt-0.5 text-[11.5px] tabular-nums ${v.profit >= 0 ? 'text-up' : 'text-down'}`}>
               {formatSigned(v.profit)}（{formatRate(v.profitRate)}）

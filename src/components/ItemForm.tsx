@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Calculator, Loader2, RefreshCw, Trash2 } from 'lucide-react'
 import type { AssetItem, Category, FundQuote } from '../types/asset'
+import { CURRENCIES, type CurrencyCode, type FxRates, isCurrencyCode, scaleHint, toCny } from '../lib/currency'
 import { isFund, isGold, parseAmount } from '../lib/calc'
 import { formatCNY, formatNav, formatRate, formatSigned } from '../lib/format'
 import { makeAmountItem, makeFundItem, makeGoldItem } from '../hooks/usePortfolio'
@@ -9,6 +10,8 @@ import NumberPad from './NumberPad'
 
 interface ItemFormProps {
   category: Category
+  /** 汇率：外币录入时实时预览折算金额 */
+  rates?: FxRates | null
   /** 传入表示编辑，不传表示新增 */
   initial?: AssetItem
   onSubmit: (item: AssetItem) => void
@@ -23,6 +26,49 @@ interface FieldMeta {
   unit?: string
   quick?: Array<{ label: string; value: string }>
 }
+
+/**
+ * 分类定制提示词。
+ * 按「分类 id 优先、其次分类名关键词」匹配，让提示更贴近真实场景：
+ * 银行类给招商银行/支付宝，股票类给指数名，国债类给中美国债。
+ */
+const HINT_PRESETS: Array<{
+  match: (categoryId: string, categoryName: string) => boolean
+  name: string
+  note: string
+  currencyHint?: string
+}> = [
+  {
+    match: (id, n) => id === 'cat_cash' || /现金|存款|银行|固定资产/.test(n),
+    name: '招商银行 / 支付宝 / 微信零钱 / 自住房',
+    note: '工资卡 / 余额宝 / 活期',
+  },
+  {
+    match: (id, n) => id === 'cat_stock' || /股票|证券/.test(n),
+    name: '中证A500 / 标普500 / 纳指100 / 贵州茅台',
+    note: '场内ETF / 券商账户',
+  },
+  {
+    match: (id, n) => id === 'cat_fund' || /基金/.test(n),
+    name: '招商中证白酒 / 易方达蓝筹',
+    note: '定投 / 场外',
+  },
+  {
+    match: (id, n) => id === 'cat_gold' || /黄金|贵金属/.test(n),
+    name: '工行积存金 / 支付宝黄金 / 周大福',
+    note: '银行积存 / 实物金',
+  },
+  {
+    match: (id, n) => id === 'cat_bond' || /国债|债券/.test(n),
+    name: '中国10年期国债 / 美国10年期国债',
+    note: '储蓄国债 / 记账式',
+  },
+  {
+    match: (id, n) => id === 'cat_debt' || /负债|贷款|信用卡/.test(n),
+    name: '招行房贷 / 信用卡账单 / 花呗',
+    note: '等额本息 / 剩余本金',
+  },
+]
 
 const FIELD_META: Record<Exclude<PickerField, null>, FieldMeta> = {
   amount: {
@@ -61,7 +107,7 @@ const FIELD_META: Record<Exclude<PickerField, null>, FieldMeta> = {
   },
 }
 
-export default function ItemForm({ category, initial, onSubmit, onDelete, onCancel }: ItemFormProps) {
+export default function ItemForm({ category, rates, initial, onSubmit, onDelete, onCancel }: ItemFormProps) {
   const editing = Boolean(initial)
   const kind: AssetItem['kind'] = initial?.kind ?? (category.items.some(isFund) ? 'fund' : 'amount')
 
@@ -74,6 +120,13 @@ export default function ItemForm({ category, initial, onSubmit, onDelete, onCanc
   const [grams, setGrams] = useState(initial && isGold(initial) ? String(initial.grams ?? '') : '')
   const [pricePerGram, setPricePerGram] = useState(initial && isGold(initial) ? String(initial.pricePerGram ?? '') : '')
 
+  const [currency, setCurrency] = useState<CurrencyCode>(() => {
+    if (initial && !isFund(initial)) {
+      const c = (initial as { currency?: string }).currency
+      if (isCurrencyCode(c)) return c
+    }
+    return 'CNY'
+  })
   const [picker, setPicker] = useState<PickerField>(null)
   const [error, setError] = useState<string | null>(null)
   const [quote, setQuote] = useState<FundQuote | undefined>(initial && isFund(initial) ? initial.quote : undefined)
@@ -83,6 +136,17 @@ export default function ItemForm({ category, initial, onSubmit, onDelete, onCanc
 
   const isFundKind = kind === 'fund'
   const isGoldKind = kind === 'gold'
+
+  // 提示词：命中预设用预设，自定义分类给通用示例
+  const preset = HINT_PRESETS.find((h) => h.match(category.id, category.name))
+  const namePlaceholder = isFundKind
+    ? '留空则自动使用基金全称'
+    : preset
+      ? `如 ${preset.name}`
+      : isGoldKind
+        ? '如 工行积存金'
+        : '如 名称（可写机构或产品）'
+  const notePlaceholder = preset ? `如 ${preset.note}` : '如 备注信息'
 
   /* ---------------- 基金代码变化：自动查询一次名称与净值 ---------------- */
   const validCode = /^\d{6}$/.test(code)
@@ -177,6 +241,7 @@ export default function ItemForm({ category, initial, onSubmit, onDelete, onCanc
           grams: g,
           pricePerGram: p,
           note: note.trim() || undefined,
+          currency,
         }),
       )
     }
@@ -185,7 +250,7 @@ export default function ItemForm({ category, initial, onSubmit, onDelete, onCanc
     if (!Number.isFinite(a)) return setError('请输入有效金额')
     if (a === 0) return setError('金额不能为 0')
     return onSubmit(
-      makeAmountItem({ name: name.trim() || '未命名', note: note.trim() || undefined, amount: a }),
+      makeAmountItem({ name: name.trim() || '未命名', note: note.trim() || undefined, amount: a, currency }),
     )
   }
 
@@ -197,6 +262,10 @@ export default function ItemForm({ category, initial, onSubmit, onDelete, onCanc
     onChange: (v: string) => void,
   ) => {
     const meta = FIELD_META[field]
+    const parsed = parseAmount(value)
+    const hint = Number.isFinite(parsed) ? scaleHint(parsed) : null
+    /** 金额 / 克数 / 单价这三个字段是「原币金额」，展示量级与折算预览 */
+    const showScale = field === 'amount' || field === 'grams' || field === 'pricePerGram'
     return (
       <div>
         <label className="field-label">{meta.label}</label>
@@ -217,10 +286,29 @@ export default function ItemForm({ category, initial, onSubmit, onDelete, onCanc
             <Calculator size={15} />
           </button>
         </div>
-        {meta.unit ? <p className="mt-1 text-[11px] text-ink4">单位：{meta.unit}</p> : null}
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-ink4">
+          {meta.unit ? <span>单位：{meta.unit}</span> : null}
+          {/* 量级提示：让用户一眼看出「最大那位是万还是十万」 */}
+          {showScale && hint && hint.label !== '元' ? (
+            <span className="rounded-full border border-line px-1.5 py-0.5 text-ink3">
+              {hint.label}位
+            </span>
+          ) : null}
+        </div>
       </div>
     )
   }
+
+  /** 外币录入时的折算预览（人民币） */
+  const convertedPreview = (() => {
+    if (currency === 'CNY') return null
+    const source = isFundKind ? null : isGoldKind ? grams : amount
+    if (source === null) return null
+    const parsed = parseAmount(source)
+    if (!Number.isFinite(parsed)) return null
+    const cny = toCny(parsed, currency, rates)
+    return { cny, missing: cny === undefined }
+  })()
 
   const pickerValue = (field: PickerField) => {
     switch (field) {
@@ -322,6 +410,47 @@ export default function ItemForm({ category, initial, onSubmit, onDelete, onCanc
 
       {numberField(isFundKind ? 'shares' : isGoldKind ? 'grams' : 'amount', isFundKind ? shares : isGoldKind ? grams : amount, isFundKind ? setShares : isGoldKind ? setGrams : setAmount)}
 
+      {/* 币种选择：基金是境内人民币净值，不提供切换 */}
+      {!isFundKind ? (
+        <div>
+          <label className="field-label" htmlFor="item-currency">
+            币种
+          </label>
+          <div className="flex items-center gap-2">
+            <select
+              id="item-currency"
+              data-testid="item-currency"
+              value={currency}
+              onChange={(e) => setCurrency(e.target.value as CurrencyCode)}
+              className="field-input flex-1"
+            >
+              {CURRENCIES.map((c) => (
+                <option key={c.code} value={c.code}>
+                  {c.label}（{c.code}）
+                </option>
+              ))}
+            </select>
+            {convertedPreview ? (
+              <span
+                className={`shrink-0 text-[12px] tabular-nums ${convertedPreview.missing ? 'tone-warn' : 'text-ink3'}`}
+              >
+                {convertedPreview.missing
+                  ? '暂无汇率'
+                  : `≈ ¥${formatCNY(convertedPreview.cny as number, 2)}`}
+              </span>
+            ) : null}
+          </div>
+          {currency !== 'CNY' ? (
+            <p className="mt-1 text-[11px] text-ink4">
+              按实时汇率折算成人民币计入总资产，汇率更新后总额会自动跟着变。
+              {rates?.perCny?.[currency]
+                ? ` 1 ${currency} ≈ ${(1 / (rates.perCny[currency] as number)).toFixed(4)} 元`
+                : ' 暂未取到该币种汇率'}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
       {isFundKind ? numberField('costNav', costNav, setCostNav) : null}
       {isGoldKind ? numberField('pricePerGram', pricePerGram, setPricePerGram) : null}
 
@@ -333,7 +462,7 @@ export default function ItemForm({ category, initial, onSubmit, onDelete, onCanc
             nameTouched.current = true
             setName(e.target.value)
           }}
-          placeholder={isFundKind ? '留空则自动使用基金全称' : '如 招商银行 / 自住房'}
+          placeholder={namePlaceholder}
           className="field-input"
         />
       </div>
@@ -343,7 +472,7 @@ export default function ItemForm({ category, initial, onSubmit, onDelete, onCanc
         <input
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          placeholder="如 工资卡 / 定投"
+          placeholder={notePlaceholder}
           className="field-input"
         />
       </div>
@@ -392,6 +521,7 @@ export default function ItemForm({ category, initial, onSubmit, onDelete, onCanc
         unit={picker ? FIELD_META[picker].unit : ''}
         quickValues={picker ? FIELD_META[picker].quick : undefined}
         value={pickerValue(picker)}
+        currencyCode={isFundKind ? 'CNY' : currency}
         onChange={(v) => setPickerValue(picker, v)}
         onClose={() => setPicker(null)}
       />
