@@ -1,0 +1,77 @@
+name: Deploy to GitHub Pages
+
+# 推送到 main 分支时自动构建并发布到 GitHub Pages
+on:
+  push:
+    branches: [main]
+  # 允许在 Actions 页面手动触发
+  workflow_dispatch:
+
+# GITHUB_TOKEN 需要这些权限才能发布 Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同时只保留一个部署任务；排队中的旧任务会被取消，但正在发布的不打断
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # pnpm 版本由 package.json 的 packageManager 字段决定
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm run typecheck
+
+      - name: Unit tests
+        run: pnpm test
+        env:
+          # CI 里不跑联网接口用例，避免第三方接口抖动导致部署失败
+          ACW_SKIP_API: '1'
+
+      - name: Build
+        run: pnpm run build
+        env:
+          # 子路径部署由 vite.config.ts 里的 base: './' 处理，无需注入 basePath
+          NODE_ENV: production
+
+      - name: Add .nojekyll
+        # 防止 GitHub Pages 的 Jekyll 处理忽略下划线开头的资源目录
+        run: touch dist/.nojekyll
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

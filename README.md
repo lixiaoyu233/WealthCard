@@ -1,0 +1,324 @@
+# WealthCard
+
+> 资产卡包 · 一个**纯前端、零后端**的个人资产归集表与再平衡工具。
+
+所有数据只保存在你自己的浏览器 `localStorage` 里，不上传任何服务器；支持基金实时估值自动同步、红涨绿跌的盈亏展示、投资策略与再平衡建议，可直接一键部署到 GitHub Pages。
+
+```
+暗黑模式 · 移动端优先（PC 居中 480px）· 数据本地持久化 · 基金实时估值 · 策略再平衡
+```
+
+```bash
+git clone https://github.com/<你的用户名>/WealthCard.git
+cd WealthCard
+pnpm install && pnpm dev
+```
+
+---
+
+## ✨ 功能一览
+
+| 模块 | 说明 |
+| --- | --- |
+| 净资产总览 | 顶部显示「资产卡包 / 净资产 CNY / 大字号总额」，并展示较上一次快照的变化；数据不足时显示「暂无历史变化」 |
+| 资产卡片 | 垂直堆叠卡片，左侧彩色半透明图标 + 分类名 + 副标题，右侧金额 + 项数标签（`3项` / `1只` / `2笔`） |
+| 默认分类 | 现金与固定资产（银行 / 房产 / 现金）、股票（全球市场 / 场内基金）、基金（场外基金 / 持仓 / 净值）、黄金（银行积存金 / 平台 / 克数）、负债（房贷 / 信用卡 / 消费贷） |
+| 增删改查 | 点击卡片打开底部详情面板，可添加 / 编辑 / 删除条目，卡片可上下排序、可改名换图标换主题色、可删除或新建分类 |
+| 基金实时估值 | 录入基金代码 + 持有份额 + 成本单价，自动拉取最新净值 / 盘中估值，计算市值与浮动盈亏并按红涨绿跌高亮 |
+| **投资策略与再平衡** | 内置全天候 / 永久组合 / 经典 60/40，支持自定义策略；自动把资产分类映射到策略资产类别，算出实际占比、偏离度、总偏离率与组合健康度，并给出「卖多少 / 买多少」的具体金额建议 |
+| 数据持久化 | 每次改动立即写入 `localStorage`，刷新 / 关掉浏览器都不丢；支持导出 / 导入 JSON 备份 |
+| 隐私 | 无账号、无埋点、无后端，可离线打开（仅基金估值需要联网） |
+
+---
+
+## 📸 界面预览
+
+> 仓库里 `screenshots/` 目录默认被 `.gitignore` 忽略（避免把验证产物提交上去）。
+> 如果想在 README 里内嵌截图，删掉 `.gitignore` 中的 `screenshots` 一行即可。
+
+| 首页与资产卡片 | 基金详情与盈亏 |
+| --- | --- |
+| ![home](screenshots/01-home.png) | ![fund](screenshots/02-fund-detail.png) |
+
+| 策略配置与再平衡 | 再平衡建议明细 |
+| --- | --- |
+| ![strategy](screenshots/strategy-01-card.png) | ![advice](screenshots/strategy-02-expanded.png) |
+
+---
+
+## 🧱 技术栈
+
+- **Vite 5** + **React 18** + **TypeScript 5**（严格模式）
+- **Tailwind CSS 3**（自定义暗色卡片样式、`rounded-card` 等）
+- **Lucide React** 图标
+- **Recharts** 绘制「目标占比 vs 实际占比」对比图（懒加载，不拖慢首屏）
+- **localStorage** 作为唯一数据源（带 Schema 规范化与损坏数据自愈）
+- **Vitest** 单元测试 + 真实接口集成测试
+
+---
+
+## 🚀 本地开发
+
+需要 Node.js ≥ 18（推荐 20/22）。仓库里提交的是 `pnpm-lock.yaml`，因此默认用 **pnpm**（npm 同样可用，只是没有锁定文件）。
+
+```bash
+# 1. 安装依赖
+pnpm install
+
+# 2. 启动开发服务器（默认 http://localhost:5173）
+pnpm dev
+
+# 3. 生产构建（输出到 dist/）
+pnpm build
+
+# 4. 本地预览构建产物（默认 http://localhost:4173）
+pnpm preview
+```
+
+喜欢用 npm 的话，把 `pnpm xxx` 换成 `npm run xxx`、`pnpm install` 换成 `npm install` 即可。
+
+其他脚本：
+
+```bash
+pnpm typecheck   # TypeScript 类型检查（tsc -b）
+pnpm test        # 单元测试 + 联网接口测试（离线会自动跳过联网用例）
+pnpm test:api    # 只跑真实基金接口集成测试
+ACW_SKIP_API=1 pnpm test   # 强制离线，跳过所有联网用例
+```
+
+---
+
+## 📦 部署到 GitHub Pages
+
+### 方式一（推荐）：GitHub Actions 自动部署
+
+1. 在 GitHub 新建仓库（建议命名 **WealthCard**），把本项目推送到 `main` 分支：
+
+   ```bash
+   git init
+   git add .
+   git commit -m "feat: 资产卡包"
+   git branch -M main
+   git remote add origin git@github.com:<你的用户名>/<仓库名>.git
+   git push -u origin main
+   ```
+
+2. 打开仓库 **Settings → Pages**，把 **Source** 设为 **GitHub Actions**。
+
+3. 之后每次推送到 `main`，`.github/workflows/deploy.yml` 会自动执行
+   `pnpm install --frozen-lockfile → typecheck → test → build → 上传 dist → 发布 Pages`。
+
+4. 发布完成后访问 `https://<你的用户名>.github.io/<仓库名>/` 即可。
+
+> 子路径无需任何额外配置：`vite.config.ts` 里已设置 `base: './'`，产物全部使用相对路径，放在仓库子路径下也能正确加载。
+
+### 方式二：手动构建后上传
+
+```bash
+pnpm build
+# 把 dist/ 目录内容（含 .nojekyll）推到 gh-pages 分支或任意静态托管
+touch dist/.nojekyll   # 需要时避免 Jekyll 忽略下划线开头的资源
+```
+
+---
+
+## 🗂 目录结构
+
+```
+WealthCard/
+├─ .github/workflows/deploy.yml   # GitHub Pages 自动部署
+├─ public/favicon.svg
+├─ src/
+│  ├─ App.tsx                     # 页面装配：顶部总览 + 卡片列表 + 弹窗
+│  ├─ components/
+│  │  ├─ Header.tsx               # 净资产总览区
+│  │  ├─ CategoryCard.tsx         # 资产分类卡片
+│  │  ├─ DetailSheet.tsx          # 分类详情 / 条目列表
+│  │  ├─ ItemForm.tsx             # 条目表单（金额 / 基金 / 黄金）
+│  │  ├─ CategoryForm.tsx         # 新增 / 编辑分类
+│  │  ├─ Sheet.tsx                # 底部弹出面板（移动端风格）
+│  │  ├─ NumberPad.tsx            # 自研数字键盘
+│  │  ├─ ConfirmDialog.tsx        # 二次确认
+│  │  ├─ StrategyCard.tsx         # 策略配置 / 再平衡建议卡片
+│  │  ├─ AllocationChart.tsx      # 占比对比图（懒加载 recharts）
+│  │  ├─ StrategySettingsSheet.tsx# 策略设置面板（策略/阈值/映射/自定义）
+│  │  └─ Toast.tsx                # 轻提示
+│  ├─ hooks/
+│  │  ├─ usePortfolio.ts          # 状态 + 持久化 + 行情同步（reducer）
+│  │  └─ useStrategy.ts           # 策略配置持久化 + 再平衡结果
+│  ├─ lib/
+│  │  ├─ calc.ts                  # 估值 / 汇总 / 数值解析 / 基金类型识别（纯函数）
+│  │  ├─ strategies.ts            # 内置策略定义、默认映射、策略校验
+│  │  ├─ rebalance.ts             # 再平衡引擎（纯函数，可单测）
+│  │  ├─ fundService.ts           # 基金行情多通道降级服务
+│  │  ├─ jsonp.ts                 # JSONP 加载器（超时 / 清理 / 并发安全）
+│  │  ├─ storage.ts               # localStorage 读写与脏数据规范化
+│  │  ├─ format.ts                # 金额 / 净值 / 百分比格式化
+│  │  ├─ defaults.ts              # 默认分类与主题色
+│  │  └─ icons.ts                 # lucide 图标白名单
+│  └─ types/
+│     ├─ asset.ts                 # 资产数据模型
+│     └─ strategy.ts              # 策略 / 映射 / 再平衡结果模型
+├─ tailwind.config.js
+├─ vite.config.ts                 # base: './' + 开发代理
+└─ README.md
+```
+
+---
+
+## 🧮 数据模型与计算口径
+
+```ts
+Category   { id, name, subtitle, icon, color, isLiability, items[] }
+AmountItem { kind: 'amount', name, amount }                       // 直接录金额
+FundItem   { kind: 'fund', code, shares, costNav, quote? }        // 代码 + 份额 + 成本价
+GoldItem   { kind: 'gold', name, grams, pricePerGram }            // 克数 + 单价
+Portfolio  { version, categories[], history[], lastSyncedAt? }
+```
+
+计算口径：
+
+- **基金市值** = 当前净值 × 持有份额；当前净值优先取**盘中估算净值（GSZ）**，无则回退**最新公布单位净值（NAV）**
+- **基金盈亏** = 市值 −（成本单价 × 份额），盈亏比例 = 盈亏 ÷ 成本
+- **黄金市值** = 克数 × 计价单价
+- **分类合计** = 分类内条目市值之和；勾选「计入负债」的分类按绝对值计入负债
+- **净资产** = 总资产 − 总负债
+- 颜色遵循 A 股习惯：**红涨绿跌**
+- 数据不足时基金以成本兜底，保证净资产不会因为还没联网而虚低 / 虚高
+
+`history` 会每天记录一条净资产快照（最多保留 120 条），用于顶部的「较上次变化」提示。
+
+---
+
+## ⚖️ 投资策略与再平衡
+
+### 内置策略
+
+| 策略 | 目标比例 |
+| --- | --- |
+| 全天候（桥水） | 股票 28.5% / 长期国债 38% / 中期国债 14.25% / 黄金 7.13% / 大宗商品 7.13% / **现金 5%** |
+| 永久组合（哈利·布朗） | 股票 25% / 长期国债 25% / 黄金 25% / 现金 25% |
+| 经典 60/40 | 股票 60% / 债券 40% |
+
+> 全天候与桥水原始的 30/40/15/7.5/7.5 相比，**额外拆出 5% 现金**，其余四类按 95% 等比缩放，合计仍为 100%。
+> 原因：用户的「现金与固定资产」（活期、房产）必须找得到归属，否则只能被硬塞进债券，偏离度会完全失真。
+> 想回到原始比例，在设置页新建自定义策略即可。
+
+### 再平衡计算口径
+
+```
+分类市值 ──映射──> 策略资产类别金额 ──> 实际占比 / 偏离度 / 加减仓金额
+```
+
+- **实际占比** = 该类市值 ÷ 分配总额
+- **偏离度**（百分点）= 实际占比 − 目标占比；`> 阈值` 建议减仓、`< −阈值` 建议加仓、阈值内标「正常」
+- **总偏离率** = Σ|偏离度| ÷ 2，用于健康度
+- **健康度**：≤3% 组合健康 · ≤8% 轻度偏离 · ≤15% 需要再平衡 · >15% 严重偏离
+- **资金自洽**：可动用资金 = min(低配缺口总额, 超配类别中**真正能卖出的标的**市值)，
+  再按各缺口比例分配给低配类别。之所以要区分「超配金额」和「可卖出市值」——
+  活期存款、房产虽然超配，却没法按比例卖出，如果把它们算成资金，就会出现凭空多出来的买入金额。
+  卖不动的那部分会显示为「手动减仓 X 元」并给出缺口提示。
+
+### 分类 → 策略类别的映射
+
+- 每种策略都有一套默认映射（「现金与固定资产」→现金、「黄金」→黄金、「负债」→债券类等），
+  在设置页的「资产映射」Tab 里可以逐条改，也可以把一个分类**按比例拆分**到多个类别（如 60% 股票 / 40% 债券）。
+- **基金按资产类型细分**：「基金」分类里的持仓会先按基金名称关键词识别为股票型 / 债券型 / 货币型 / 黄金商品型，
+  再分别归到「股票」或「债券」等类别（例如「易方达纯债债券A」→债券）。识别不出来的可在基金条目上手动标记。
+- 自定义分类没命中内置映射时，按名称关键词（现金 / 股 / 债 / 黄金 / 商品 / 负债…）兜底，
+  仍匹配不到就归入目标占比最大的类别，保证金额不会凭空消失（卡片里会提示）。
+- **负债默认不进占比分母**（按「可投资资产」计算），可在设置里切换为计入分母（按净值计算）。
+
+### 策略配置
+
+点击策略卡片右上角的设置按钮：
+
+- 切换策略 / 新建与编辑自定义策略（类别名称、目标比例、颜色，**合计必须 100% 才能保存**）
+- 拖动「偏离阈值」滑块（默认 5%，范围 1%~20%）
+- 编辑资产映射 / 一键恢复默认映射
+- 负债是否计入占比分母
+
+策略配置保存在 localStorage 的 `asset-card-wallet/strategy/v1`，与资产数据分开存放。
+
+---
+
+## 🔌 接口说明（重要，含实测结论）
+
+需求文档里给出的接口是：
+
+```
+https://fundgz.1234567.com.cn/js/{基金代码}.js?rt={时间戳}
+```
+
+**实测（2026-10）该域名已下线**：无论 HTTP/HTTPS、是否带 `Referer`，都返回东方财富的「页面未找到」HTML（`Content-Type: text/html`），拿不到 `jsonpgz({...})` 数据。因此本项目没有把身家性命押在它上面，而是实现了**多通道自动降级**（`src/lib/fundService.ts`），任一通道成功即返回：
+
+| 顺序 | 通道 | 实现方式 | 说明 |
+| --- | --- | --- | --- |
+| 1 | `fundmobapi.eastmoney.com/FundMNewApi/FundMNFInfo` | `fetch`（该接口返回 `Access-Control-Allow-Origin: *`，并正确响应 OPTIONS 预检） | 天天基金 App 接口，**支持一次批量传入多只基金代码**，同时返回基金全称、最新公布净值、盘中估算净值与估算涨幅，首选 |
+| 2 | 同上的 `FundMNFInfo` | **JSONP**（`callback=` 回调） | **同一份数据，但走 `<script>` 加载**：即使 fetch 被网络策略 / 插件拦截，也能靠它拿到估值，是真正可用的 JSONP 兜底 |
+| 3 | `push2.eastmoney.com/api/qt/ulist.np/get` | **JSONP**（`cb=` 回调） | 东方财富行情接口，返回 LOF / ETF 的场内实时价与涨跌幅；交易所前缀由代码首位推断（`5` 开头 → 沪市 `1.`，其余 → 深市 `0.`） |
+| 4 | `fundgz.1234567.com.cn/js/{code}.js` | **JSONP**（`jsonpgz(...)`） | 历史接口（已下线），代码保留；一旦该接口恢复，无需改动业务代码即可自动重新启用 |
+
+### JSONP 在 Vite / GitHub Pages 下如何工作
+
+`src/lib/jsonp.ts` 用 `<script src>` 动态注入来绕过同源策略（脚本标签不受 CORS 限制），要点：
+
+1. 回调名全局唯一（`__acw_jsonp_<时间戳>_<序号>`）并挂在 `globalThis` 上，避免并发请求互相覆盖；
+2. 成功后删除全局函数并移除 `<script>`，不泄漏 DOM 节点；
+3. 默认 12s 超时，避免网络挂起导致 Promise 永不 settle；
+4. `script.onerror` 兜底捕获「域名不可达 / 已被拦截」，并把可读的错误原因透出到界面。
+
+浏览器里实际**优先走 `fetch`**（通道 1），只有 fetch 失败（网络策略、代理、接口变更）时才自动降级到通道 2/3/4 的 JSONP。这样既拿到了最快最稳的数据源，又保留了 JSONP 的兜底能力。
+
+### 遇到跨域 / 拉不到数据怎么办
+
+- 本项目调用的是第三方公开接口，**无法保证永久可用**；接口变动时只需在 `src/lib/fundService.ts` 里新增一个 provider。
+- 浏览器插件（广告拦截、隐私防护）可能拦掉 `*.eastmoney.com` 的脚本，导致 JSONP 通道失败 —— 界面会提示具体原因。
+- 若本地开发环境直连被拦截，`vite.config.ts` 已经预留了 `/eastmoney` 代理（指向 `https://fundmobapi.eastmoney.com`），可在 provider 里把基址换成本地代理路径。
+- 非交易时段 / QDII 基金可能没有盘中估值，界面会显示「暂无盘中估值（非交易时段 / QDII）」并回退到最新公布净值。
+- 估值仅供参考，实际以基金公司公布净值为准。
+
+---
+
+## 📱 响应式与交互
+
+- 移动端优先：整页最大宽度 `480px`，PC 上水平居中，模拟手机 App 观感
+- 底部弹出面板 + 遮罩，支持 `Esc` 关闭、点击遮罩关闭、打开时锁定背景滚动
+- 自研数字键盘（含 `1万 / 10万 / 100万` 等快捷金额），避免移动端输入法与小数点问题
+- 适配 `env(safe-area-inset-*)` 安全区（iPhone 刘海 / 底部横条）
+- 顶部金额可一键隐藏 / 显示（状态同样持久化）
+- 每 5 分钟 + 页面首次加载时静默刷新基金估值
+
+---
+
+## ❓ 常见问题
+
+**Q：数据存在哪里？会不会丢？**
+A：只存在当前浏览器的 `localStorage`（键名 `asset-card-wallet/portfolio/v2`）。清理浏览器数据、换浏览器、用无痕模式都会看不到旧数据，建议定期用「导出 JSON」备份。
+
+**Q：换电脑怎么迁移？**
+A：旧设备「导出 JSON」→ 新设备「导入 JSON」。
+
+**Q：净资产为什么和我算的不一样？**
+A：注意「负债」分类勾选了「计入负债」后会从净资产中扣减；基金按最新估值计算，非交易时段用的是最近一次同步的净值（可点右上角刷新）。
+
+**Q：构建时报 `Cannot find module @rollup/rollup-darwin-arm64` / `dlopen ... different Team IDs`？**
+A：这是 macOS 上原生模块签名与运行时签名不匹配导致的（例如用带 Hardened Runtime 的签名 Node 加载 ad-hoc 签名的 rollup binding）。换用官方 Node 或 `nvm` 安装的 Node 执行构建即可；GitHub Actions 的 Node 环境不受影响。
+
+**Q：为什么「现金与固定资产」在组合里的占比这么高，偏离度一下就爆表？**
+A：房产、活期这些确实会占大头。如果不想让它们参与策略比较，可以在设置 →「资产映射」里把该分类映射成不合适就删掉映射，或把「负债计入占比分母」打开按净值口径看；也可以只用自定义策略，把目标比例设成符合自己实际情况的数字。
+
+**Q：再平衡建议里的金额为什么比我预期的少？**
+A：可动用资金只统计**能按比例卖出的标的**（目前是基金）。活期存款、房产虽然超配，但无法自动减仓，这部分会显示成「手动减仓 X 元」并提示缺口，需要你手动处理或靠新增投入补齐。
+
+**Q：基金被归错类别怎么办？**
+A：基金默认按名称关键词识别类型。识别不准时，在基金条目的编辑表单里可以手动标记为股票型 / 债券型等；也可以在「资产映射」里直接改整个「基金」分类的归属。
+
+**Q：`pnpm install` 提示忽略了 esbuild 的构建脚本？**
+A：pnpm 10+ 默认拦截依赖的安装脚本，仓库里的 `pnpm-workspace.yaml` 与 `package.json` 的 `pnpm.onlyBuiltDependencies` 已放行 `esbuild`；若仍提示，执行 `pnpm approve-builds` 选择 esbuild 即可。
+
+---
+
+## 📄 License
+
+MIT

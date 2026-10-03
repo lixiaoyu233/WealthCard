@@ -1,0 +1,99 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    min-height: 100%;
+    background-color: #000000;
+  }
+
+  body {
+    @apply bg-black text-zinc-100 antialiased;
+    -webkit-tap-highlight-color: transparent;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* 去掉数字输入框上下箭头，移动端更接近原生 App */
+  input[type='number']::-webkit-outer-spin-button,
+  input[type='number']::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type='number'] {
+    -moz-appearance: textfield;
+  }
+
+  ::selection {
+    background: rgba(240, 185, 11, 0.3);
+  }
+}
+
+@layer components {
+  /* 卡片：深色渐变 + 16px 圆角 + 极弱边框 */
+  .card-surface {
+    @apply relative overflow-hidden rounded-card border border-white/[0.06] shadow-card;
+    background-image: linear-gradient(160deg, #1a1a1a 0%, #131313 45%, #111111 100%);
+  }
+
+  .card-surface:active {
+    @apply border-white/[0.12];
+  }
+
+  .field-label {
+    @apply mb-1.5 block text-[12px] font-medium text-zinc-500;
+  }
+
+  .field-input {
+    @apply w-full rounded-xl border border-white/[0.08] bg-white/[0.04] px-3.5 py-3 text-[15px] text-zinc-100
+      placeholder:text-zinc-600 outline-none transition
+      focus:border-white/20 focus:bg-white/[0.06];
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-full px-4 py-2.5 text-[14px] font-medium
+      transition active:scale-[0.97] disabled:pointer-events-none disabled:opacity-40;
+  }
+
+  .btn-primary {
+    @apply btn bg-white text-black hover:bg-zinc-200;
+  }
+
+  .btn-ghost {
+    @apply btn border border-white/[0.08] bg-white/[0.04] text-zinc-200 hover:bg-white/[0.08];
+  }
+
+  .btn-danger {
+    @apply btn border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full border border-white/[0.06] bg-white/[0.05] px-2 py-0.5
+      text-[11px] font-medium text-zinc-400;
+  }
+}
+
+@layer utilities {
+  .safe-bottom {
+    padding-bottom: max(env(safe-area-inset-bottom), 0.5rem);
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .tap-none {
+    -webkit-touch-callout: none;
+    user-select: none;
+  }
+}
