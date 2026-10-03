@@ -14,6 +14,7 @@ import StrategyCard from './components/StrategyCard'
 import StrategySettingsSheet from './components/StrategySettingsSheet'
 import Toast, { type ToastMessage, type ToastTone } from './components/Toast'
 import { useStrategy } from './hooks/useStrategy'
+import { useTheme } from './hooks/useTheme'
 import { categoryTotal } from './lib/calc'
 import { statusLine } from './lib/rebalance'
 
@@ -41,6 +42,9 @@ export default function App() {
     resetAll,
     importPortfolio,
   } = usePortfolio()
+
+  /** 主题：默认跟随系统，可手动切日间 / 夜间 */
+  const { mode: themeMode, cycle: cycleTheme } = useTheme()
 
   /** 策略与再平衡（纯前端计算，配置单独持久化） */
   const strategyState = useStrategy(portfolio)
@@ -153,7 +157,7 @@ export default function App() {
   }
 
   const handleCategorySubmit = (
-    patch: Pick<Category, 'name' | 'subtitle' | 'icon' | 'color' | 'isLiability'>,
+    patch: Pick<Category, 'name' | 'subtitle' | 'icon' | 'color' | 'colorName' | 'isLiability'>,
   ) => {
     if (categoryForm.initial) {
       updateCategory(categoryForm.initial.id, patch)
@@ -168,22 +172,22 @@ export default function App() {
   const settingsOpen = categoryForm.open && !categoryForm.initial
 
   return (
-    <div className="min-h-screen bg-black">
+    <div className="min-h-screen bg-app">
       <div className="mx-auto w-full max-w-[480px] px-4 pb-16">
         {storageError ? (
-          <div className="mt-4 flex items-start gap-2 rounded-2xl border border-amber-500/25 bg-amber-500/10 px-3.5 py-2.5 text-[12px] text-amber-300">
+          <div className="mt-4 flex items-start gap-2 rounded-2xl border border-warn/25 bg-warn/10 px-3.5 py-2.5 text-[12px] tone-warn">
             <TriangleAlert size={14} className="mt-0.5 shrink-0" />
             <span>{storageError}</span>
           </div>
         ) : null}
 
         {recovered ? (
-          <div className="mt-4 flex items-start gap-2 rounded-2xl border border-white/[0.08] bg-white/[0.04] px-3.5 py-2.5 text-[12px] text-zinc-300">
-            <TriangleAlert size={14} className="mt-0.5 shrink-0 text-amber-400" />
+          <div className="mt-4 flex items-start gap-2 rounded-2xl border border-line bg-s2 px-3.5 py-2.5 text-[12px] text-ink2">
+            <TriangleAlert size={14} className="mt-0.5 shrink-0 tone-warn" />
             <span className="flex-1">
               检测到本地数据缺失或损坏，已恢复为默认分类。
             </span>
-            <button type="button" className="shrink-0 text-zinc-500 underline" onClick={dismissRecovered}>
+            <button type="button" className="shrink-0 text-ink4 underline" onClick={dismissRecovered}>
               知道了
             </button>
           </div>
@@ -198,21 +202,23 @@ export default function App() {
           hidden={hidden}
           onToggleHidden={toggleHidden}
           onRefresh={() => void handleRefresh()}
+          themeMode={themeMode}
+          onCycleTheme={cycleTheme}
           strategyStatus={{ text: statusLine(rebalance), level: rebalance.health }}
         />
 
         {/* 分区标题 */}
         <div className="mt-7 flex items-end justify-between px-1">
           <div>
-            <h2 className="text-[13px] font-medium text-zinc-300">资产分类</h2>
-            <p className="mt-0.5 text-[11px] text-zinc-600">
+            <h2 className="text-[13px] font-medium text-ink2">资产分类</h2>
+            <p className="mt-0.5 text-[11px] text-ink4">
               {portfolio.categories.length} 个分类 · {stats.items} 条记录
             </p>
           </div>
           <button
             type="button"
             onClick={() => setCategoryForm({ open: true, initial: null })}
-            className="inline-flex items-center gap-1 rounded-full border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-[12px] text-zinc-300 transition hover:bg-white/[0.08] active:scale-95"
+            className="inline-flex items-center gap-1 rounded-full border border-line bg-s2 px-2.5 py-1.5 text-[12px] text-ink2 transition hover:bg-s3 active:scale-95"
           >
             <Plus size={13} /> 新分类
           </button>
@@ -230,8 +236,8 @@ export default function App() {
           ))}
 
           {portfolio.categories.length === 0 ? (
-            <div className="rounded-card border border-dashed border-white/[0.1] px-4 py-10 text-center">
-              <p className="text-[13px] text-zinc-400">还没有任何资产分类</p>
+            <div className="rounded-card border border-dashed border-line px-4 py-10 text-center">
+              <p className="text-[13px] text-ink3">还没有任何资产分类</p>
               <button
                 type="button"
                 className="btn-primary mx-auto mt-3"
@@ -250,9 +256,9 @@ export default function App() {
 
         {/* 基金持仓汇总 */}
         {stats.cost > 0 ? (
-          <div className="mt-4 rounded-card border border-white/[0.06] bg-white/[0.02] px-4 py-3.5">
+          <div className="mt-4 rounded-card border border-line bg-s2 px-4 py-3.5">
             <div className="flex items-center justify-between">
-              <span className="text-[12px] text-zinc-500">基金持仓总盈亏</span>
+              <span className="text-[12px] text-ink4">基金持仓总盈亏</span>
               <span
                 className={`inline-flex items-center gap-1 text-[15px] font-semibold tabular-nums ${
                   stats.profit >= 0 ? 'text-up' : 'text-down'
@@ -263,29 +269,29 @@ export default function App() {
               </span>
             </div>
             <div className="mt-1.5 flex items-center justify-between text-[11px]">
-              <span className="text-zinc-600">成本合计 {hidden ? '••••' : `${formatCNY(stats.cost)} 元`}</span>
+              <span className="text-ink4">成本合计 {hidden ? '••••' : `${formatCNY(stats.cost)} 元`}</span>
               <span className={stats.profit >= 0 ? 'text-up/80' : 'text-down/80'}>{formatRate(stats.rate)}</span>
             </div>
-            <div className="mt-2 flex items-center justify-between border-t border-white/[0.05] pt-2 text-[11px] text-zinc-600">
+            <div className="mt-2 flex items-center justify-between border-t border-line pt-2 text-[11px] text-ink4">
               <span>{fundCodes.length} 只基金 · 数据来自天天基金公开接口</span>
               <button
                 type="button"
                 onClick={() => void handleRefresh()}
                 disabled={sync.loading}
-                className="text-zinc-400 underline-offset-2 hover:underline disabled:opacity-50"
+                className="text-ink3 underline-offset-2 hover:underline disabled:opacity-50"
               >
                 {sync.loading ? '同步中…' : '立即刷新'}
               </button>
             </div>
             {sync.lastSuccessAt ? (
-              <p className="mt-1 text-[11px] text-zinc-600">上次更新：{formatRelative(sync.lastSuccessAt)}</p>
+              <p className="mt-1 text-[11px] text-ink4">上次更新：{formatRelative(sync.lastSuccessAt)}</p>
             ) : null}
           </div>
         ) : null}
 
         {/* 数据管理 */}
         <div className="mt-6">
-          <h2 className="px-1 text-[13px] font-medium text-zinc-300">数据管理</h2>
+          <h2 className="px-1 text-[13px] font-medium text-ink2">数据管理</h2>
           <div className="mt-3 grid grid-cols-2 gap-2.5">
             <button type="button" className="btn-ghost" onClick={handleExport}>
               <Download size={14} /> 导出 JSON
@@ -307,7 +313,7 @@ export default function App() {
               <RotateCcw size={14} /> 清空全部数据
             </button>
           </div>
-          <p className="mt-3 px-1 text-[11px] leading-relaxed text-zinc-600">
+          <p className="mt-3 px-1 text-[11px] leading-relaxed text-ink4">
             纯前端应用：所有数据仅保存在本机浏览器的 localStorage，清除浏览器数据会同时清空记录，建议定期导出备份。
           </p>
         </div>

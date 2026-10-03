@@ -16,9 +16,9 @@ const icons = {
 } as const
 
 const tones = {
-  info: 'border-white/[0.08] bg-[#141414] text-zinc-200',
-  success: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300',
-  error: 'border-red-500/25 bg-red-500/10 text-red-300',
+  info: 'border-line bg-s2 text-ink2',
+  success: 'border-down/25 bg-down/10 tone-good',
+  error: 'border-danger/25 bg-danger/10 tone-danger',
 } as const
 
 /** 顶部轻提示，自动消失 */

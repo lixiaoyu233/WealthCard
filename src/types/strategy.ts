@@ -19,8 +19,10 @@ export interface StrategyClass {
   name: string
   /** 目标比例，百分比数值（30 表示 30%），同一策略内合计必须为 100 */
   target: number
-  /** 图表用主题色 */
+  /** 图表用主题色（`var(--accent-*)`） */
   color: string
+  /** 色名，用于取半透明底色；缺省表示自定义色 */
+  colorName?: string
 }
 
 export interface Strategy {

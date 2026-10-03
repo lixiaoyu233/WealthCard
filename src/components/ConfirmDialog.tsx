@@ -32,7 +32,7 @@ export default function ConfirmDialog({
       leading={
         <span
           className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
-            danger ? 'bg-red-500/12 text-red-400' : 'bg-white/[0.06] text-zinc-300'
+            danger ? 'bg-danger/12 tone-danger' : 'bg-s3 text-ink2'
           }`}
         >
           <AlertTriangle size={16} />
@@ -54,7 +54,7 @@ export default function ConfirmDialog({
         </div>
       }
     >
-      <p className="text-[13px] leading-relaxed text-zinc-400">{description ?? '该操作不可撤销，请确认。'}</p>
+      <p className="text-[13px] leading-relaxed text-ink3">{description ?? '该操作不可撤销，请确认。'}</p>
     </Sheet>
   )
 }

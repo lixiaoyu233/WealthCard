@@ -50,22 +50,31 @@ function normalizeStrategy(raw: unknown): Strategy | null {
           const cid = typeof c.id === 'string' && c.id ? c.id : `class_${i}`
           const name = typeof c.name === 'string' && c.name ? c.name : `类别 ${i + 1}`
           const target = Number(c.target)
+          const colorName = typeof c.colorName === 'string' && c.colorName ? c.colorName : undefined
           return {
             id: cid,
             name,
             target: Number.isFinite(target) ? target : 0,
-            color: typeof c.color === 'string' && c.color ? c.color : '#3b82f6',
+            colorName,
+            // 色名优先：没有色名说明是用户自定义颜色，退回保存的色值
+            color: colorName ? `var(--accent-${colorName})` : typeof c.color === 'string' && c.color ? c.color : 'var(--accent-blue)',
           }
         })
         .filter((c): c is NonNullable<typeof c> => c !== null)
     : []
   if (classes.length === 0) return null
+  // 旧版本里「现金」被分到紫色，语义上中性灰更贴切，这里做一次纠正
+  const fixed = classes.map((c) =>
+    c.id === 'cash' && c.colorName === 'purple'
+      ? { ...c, colorName: 'slate', color: 'var(--accent-slate)' }
+      : c,
+  )
   return {
     id,
     name: typeof raw.name === 'string' && raw.name ? raw.name : '自定义策略',
     kind: 'custom',
     description: typeof raw.description === 'string' ? raw.description : '',
-    classes,
+    classes: fixed,
   }
 }
 

@@ -56,26 +56,26 @@ export default function Sheet({
         type="button"
         aria-label="关闭"
         onClick={onClose}
-        className="absolute inset-0 animate-fade-in cursor-default bg-black/70 backdrop-blur-[2px]"
+        className="absolute inset-0 animate-fade-in cursor-default bg-scrim backdrop-blur-[2px]"
       />
       <div
         ref={panelRef}
         tabIndex={-1}
         className={`relative flex max-h-[92vh] w-full ${maxWidth} animate-sheet-in flex-col overflow-hidden
-          rounded-t-[22px] border border-white/[0.08] bg-[#0d0d0d] shadow-[0_-8px_40px_-12px_rgba(0,0,0,0.95)]
+          rounded-t-[22px] border border-line bg-s1 shadow-[0_-8px_40px_-12px_rgba(0,0,0,0.95)]
           outline-none sm:rounded-[22px]`}
       >
-        <div className="flex items-start gap-3 border-b border-white/[0.06] px-5 py-4">
+        <div className="flex items-start gap-3 border-b border-line px-5 py-4">
           {leading}
           <div className="min-w-0 flex-1">
-            <h2 className="truncate text-[16px] font-semibold text-zinc-100">{title}</h2>
-            {subtitle ? <p className="mt-0.5 truncate text-[12px] text-zinc-500">{subtitle}</p> : null}
+            <h2 className="truncate text-[16px] font-semibold text-ink1">{title}</h2>
+            {subtitle ? <p className="mt-0.5 truncate text-[12px] text-ink4">{subtitle}</p> : null}
           </div>
           <button
             type="button"
             onClick={onClose}
             aria-label="关闭面板"
-            className="-mr-1 -mt-1 rounded-full p-2 text-zinc-500 transition hover:bg-white/[0.06] hover:text-zinc-200"
+            className="-mr-1 -mt-1 rounded-full p-2 text-ink4 transition hover:bg-s3 hover:text-ink2"
           >
             <X size={18} />
           </button>
@@ -84,7 +84,7 @@ export default function Sheet({
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">{children}</div>
 
         {footer ? (
-          <div className="safe-bottom border-t border-white/[0.06] bg-[#0d0d0d] px-5 pt-3">{footer}</div>
+          <div className="safe-bottom border-t border-line bg-s1 px-5 pt-3">{footer}</div>
         ) : (
           <div className="safe-bottom" />
         )}

@@ -88,8 +88,10 @@ export interface Category {
   subtitle: string
   /** lucide 图标名，见 lib/icons.ts 的映射白名单 */
   icon: string
-  /** 主题色 hex，用于图标底色与强调色 */
+  /** 主题色（形如 `var(--accent-gold)`），随主题切换 */
   color: string
+  /** 色名（gold/blue/…），用于取对应的半透明底色变量；自定义颜色时为空 */
+  colorName?: string
   /** 是否计入负债（负债类金额取负参与净资产计算） */
   isLiability?: boolean
   items: AssetItem[]

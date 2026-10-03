@@ -1,13 +1,65 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
-    <meta name="theme-color" content="#000000" />
-    <meta name="color-scheme" content="dark" />
-    <meta name="description" content="WealthCard — 本地纯前端资产归集表与再平衡工具，数据只保存在你的浏览器里。" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <meta
+      name="description"
+      content="WealthCard — 本地优先的个人资产归集与再平衡工具。资产卡片、基金实时估值、投资策略与再平衡建议，数据只保存在本机浏览器。"
+    />
+    <meta name="color-scheme" content="dark light" />
+    <!-- 地址栏 / PWA 状态栏配色，跟随系统主题；运行时 useTheme 会按用户选择覆盖 -->
+    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f5f5f4" media="(prefers-color-scheme: light)" />
+
+    <!-- ============ PWA：可添加到主屏幕 ============ -->
+    <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <!-- iOS 不读 manifest 里的图标，必须单独提供 apple-touch-icon（PNG） -->
+    <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="WealthCard" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="application-name" content="WealthCard" />
+    <meta name="format-detection" content="telephone=no" />
+
     <title>WealthCard · 资产卡包</title>
+
+    <!--
+      首屏防闪白：在样式表之前先定好 data-theme / color-scheme，
+      否则夜间用户会先闪一帧浅色再跳回深色。
+      这段脚本必须同步执行，不要改成 defer / type=module。
+    -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('asset-card-wallet/theme')
+          var theme =
+            saved === 'light' || saved === 'dark'
+              ? saved
+              : saved === 'true'
+                ? 'dark'
+                : saved === 'false'
+                  ? 'light'
+                  : window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches
+                    ? 'light'
+                    : 'dark'
+          var root = document.documentElement
+          root.setAttribute('data-theme', theme)
+          root.style.colorScheme = theme
+          var bg = theme === 'light' ? '#f5f5f4' : '#000000'
+          root.style.backgroundColor = bg
+          var metas = document.querySelectorAll('meta[name="theme-color"]')
+          for (var i = 0; i < metas.length; i++) metas[i].setAttribute('content', bg)
+        } catch (e) {
+          /* localStorage 不可用时保持默认深色 */
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

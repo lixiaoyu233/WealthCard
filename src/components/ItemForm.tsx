@@ -212,12 +212,12 @@ export default function ItemForm({ category, initial, onSubmit, onDelete, onCanc
             type="button"
             onClick={() => setPicker(field)}
             aria-label={`打开数字键盘输入${meta.label}`}
-            className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-lg border border-white/[0.08] bg-white/[0.05] p-2 text-zinc-400 transition hover:text-zinc-100"
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-lg border border-line bg-s3 p-2 text-ink3 transition hover:text-ink1"
           >
             <Calculator size={15} />
           </button>
         </div>
-        {meta.unit ? <p className="mt-1 text-[11px] text-zinc-600">单位：{meta.unit}</p> : null}
+        {meta.unit ? <p className="mt-1 text-[11px] text-ink4">单位：{meta.unit}</p> : null}
       </div>
     )
   }
@@ -276,38 +276,38 @@ export default function ItemForm({ category, initial, onSubmit, onDelete, onCanc
               <span className="text-[13px]">查净值</span>
             </button>
           </div>
-          <p className="mt-1 text-[11px] text-zinc-600">6 位数字，来自天天基金 / 东方财富公开接口</p>
+          <p className="mt-1 text-[11px] text-ink4">6 位数字，来自天天基金 / 东方财富公开接口</p>
         </div>
       ) : null}
 
       {/* 行情预览 */}
       {isFundKind && (quote || quoteError || quoteLoading) ? (
-        <div className="rounded-2xl border border-white/[0.07] bg-white/[0.03] px-3.5 py-3">
+        <div className="rounded-2xl border border-line bg-s2 px-3.5 py-3">
           {quoteLoading ? (
-            <p className="flex items-center gap-2 text-[12px] text-zinc-500">
+            <p className="flex items-center gap-2 text-[12px] text-ink4">
               <Loader2 size={13} className="animate-spin" /> 正在获取最新估值…
             </p>
           ) : quoteError ? (
-            <p className="text-[12px] text-amber-400/90">{quoteError}，可先保存，稍后在详情页刷新</p>
+            <p className="text-[12px] tone-warn/90">{quoteError}，可先保存，稍后在详情页刷新</p>
           ) : quote ? (
             <div className="space-y-1.5">
-              <p className="truncate text-[13px] font-medium text-zinc-200">{quote.name || code}</p>
+              <p className="truncate text-[13px] font-medium text-ink2">{quote.name || code}</p>
               <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[12px]">
                 {quote.estimatedNav !== undefined ? (
-                  <span className="text-zinc-300">
+                  <span className="text-ink2">
                     盘中估算 <span className="font-medium tabular-nums">{formatNav(quote.estimatedNav)}</span>
                     <span className={`ml-1.5 ${(quote.estimatedRate ?? 0) >= 0 ? 'text-up' : 'text-down'}`}>
                       {formatRate(quote.estimatedRate)}
                     </span>
                   </span>
                 ) : (
-                  <span className="text-zinc-500">暂无盘中估值（非交易时段 / QDII）</span>
+                  <span className="text-ink4">暂无盘中估值（非交易时段 / QDII）</span>
                 )}
               </div>
-              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[12px] text-zinc-500">
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[12px] text-ink4">
                 {quote.publishedNav !== undefined ? (
                   <span>
-                    最新净值 <span className="tabular-nums text-zinc-300">{formatNav(quote.publishedNav)}</span>
+                    最新净值 <span className="tabular-nums text-ink2">{formatNav(quote.publishedNav)}</span>
                     <span className={`ml-1.5 ${(quote.publishedRate ?? 0) >= 0 ? 'text-up' : 'text-down'}`}>
                       {formatRate(quote.publishedRate)}
                     </span>
@@ -350,18 +350,18 @@ export default function ItemForm({ category, initial, onSubmit, onDelete, onCanc
 
       {/* 提交前预览 */}
       {preview ? (
-        <div className="rounded-2xl border border-white/[0.07] bg-white/[0.03] px-3.5 py-3">
+        <div className="rounded-2xl border border-line bg-s2 px-3.5 py-3">
           <div className="flex items-center justify-between text-[12px]">
-            <span className="text-zinc-500">当前市值</span>
-            <span className="font-medium tabular-nums text-zinc-100">{formatCNY(preview.value)} 元</span>
+            <span className="text-ink4">当前市值</span>
+            <span className="font-medium tabular-nums text-ink1">{formatCNY(preview.value)} 元</span>
           </div>
           <div className="mt-1.5 flex items-center justify-between text-[12px]">
-            <span className="text-zinc-500">{isFundKind ? '持仓成本' : '金额'}</span>
-            <span className="tabular-nums text-zinc-300">{formatCNY(preview.cost)} 元</span>
+            <span className="text-ink4">{isFundKind ? '持仓成本' : '金额'}</span>
+            <span className="tabular-nums text-ink2">{formatCNY(preview.cost)} 元</span>
           </div>
           {isFundKind ? (
             <div className="mt-1.5 flex items-center justify-between text-[12px]">
-              <span className="text-zinc-500">浮动盈亏</span>
+              <span className="text-ink4">浮动盈亏</span>
               <span className={`font-medium tabular-nums ${preview.profit >= 0 ? 'text-up' : 'text-down'}`}>
                 {formatSigned(preview.profit)} 元（{formatRate(preview.rate)}）
               </span>
@@ -370,7 +370,7 @@ export default function ItemForm({ category, initial, onSubmit, onDelete, onCanc
         </div>
       ) : null}
 
-      {error ? <p className="text-[12px] text-red-400">{error}</p> : null}
+      {error ? <p className="text-[12px] tone-danger">{error}</p> : null}
 
       <div className="flex items-center gap-2.5 pt-0.5">
         <button type="button" className="btn-primary flex-1" onClick={submit}>
@@ -397,7 +397,7 @@ export default function ItemForm({ category, initial, onSubmit, onDelete, onCanc
       />
 
       {/* 数值简要说明，帮助理解计价口径 */}
-      <p className="text-[11px] leading-relaxed text-zinc-600">
+      <p className="text-[11px] leading-relaxed text-ink4">
         {isFundKind
           ? '市值 = 最新估值 × 持有份额；盈亏 = 市值 −（成本单价 × 份额）。打开页面、点击刷新或每 5 分钟会自动更新估值。'
           : isGoldKind

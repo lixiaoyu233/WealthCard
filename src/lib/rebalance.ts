@@ -275,10 +275,10 @@ export function healthFor(totalDeviation: number): { level: HealthLevel; label: 
 }
 
 export const HEALTH_META: Record<HealthLevel, { label: string; badge: string; dot: string }> = {
-  healthy: { label: '组合健康', badge: 'text-emerald-300 bg-emerald-500/12 border-emerald-500/25', dot: 'bg-emerald-400' },
-  watch: { label: '轻度偏离', badge: 'text-lime-300 bg-lime-500/12 border-lime-500/25', dot: 'bg-lime-400' },
-  warning: { label: '需要再平衡', badge: 'text-amber-300 bg-amber-500/12 border-amber-500/25', dot: 'bg-amber-400' },
-  critical: { label: '严重偏离', badge: 'text-red-300 bg-red-500/12 border-red-500/25', dot: 'bg-red-400' },
+  healthy: { label: '组合健康', badge: 'badge-good', dot: 'bg-down' },
+  watch: { label: '轻度偏离', badge: 'badge-muted', dot: 'bg-good' },
+  warning: { label: '需要再平衡', badge: 'badge-warn', dot: 'bg-warn' },
+  critical: { label: '严重偏离', badge: 'badge-danger', dot: 'bg-danger' },
 }
 
 export function computeRebalance(

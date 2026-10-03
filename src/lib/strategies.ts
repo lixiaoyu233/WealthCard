@@ -4,25 +4,25 @@ import type { MappingEntry, Strategy, StrategyClass, StrategyId } from '../types
  * 内置策略
  * ------------------------------------------------------------------ */
 
-/** 策略类别主题色（按顺序取用，保证图表可区分） */
-export const CLASS_COLORS = [
-  '#3b82f6',
-  '#22c55e',
-  '#f0b90b',
-  '#a855f7',
-  '#06b6d4',
-  '#f97316',
-  '#ef4444',
-  '#ec4899',
-  '#84cc16',
-  '#8b5cf6',
-]
+/**
+ * 预设强调色。取值是 CSS 变量的引用而不是 hex ——
+ * 这样「白天主题」能自动换成对比度更高的深色版，不必改数据。
+ */
+export const ACCENT_NAMES = ['blue', 'green', 'gold', 'purple', 'cyan', 'orange', 'red', 'pink', 'slate'] as const
+export type AccentName = (typeof ACCENT_NAMES)[number]
 
-const cls = (id: string, name: string, target: number, color: string): StrategyClass => ({
+export const accentVar = (name: AccentName) => `var(--accent-${name})`
+export const accentSoftVar = (name: AccentName) => `var(--accent-${name}-soft)`
+
+/** 默认取色顺序（新增分类时轮换使用） */
+export const CLASS_COLORS: string[] = ACCENT_NAMES.map(accentVar)
+
+const cls = (id: string, name: string, target: number, colorName: AccentName): StrategyClass => ({
   id,
   name,
   target,
-  color,
+  color: accentVar(colorName),
+  colorName,
 })
 
 /**
@@ -39,12 +39,12 @@ const ALL_WEATHER: Strategy = {
   kind: 'builtin',
   description: '股票 28.5% / 长期国债 38% / 中期国债 14.25% / 黄金 7.13% / 大宗商品 7.13% / 现金 5%',
   classes: [
-    cls('stock', '股票', 28.5, '#3b82f6'),
-    cls('bond-long', '长期国债', 38, '#22c55e'),
-    cls('bond-mid', '中期国债', 14.25, '#14b8a6'),
-    cls('gold', '黄金', 7.125, '#f0b90b'),
-    cls('commodity', '大宗商品', 7.125, '#f97316'),
-    cls('cash', '现金', 5, '#a1a1aa'),
+    cls('stock', '股票', 28.5, 'blue'),
+    cls('bond-long', '长期国债', 38, 'green'),
+    cls('bond-mid', '中期国债', 14.25, 'cyan'),
+    cls('gold', '黄金', 7.125, 'gold'),
+    cls('commodity', '大宗商品', 7.125, 'orange'),
+    cls('cash', '现金', 5, 'slate'),
   ],
 }
 
@@ -58,10 +58,10 @@ const PERMANENT: Strategy = {
   kind: 'builtin',
   description: '股票 25% / 长期国债 25% / 黄金 25% / 现金 25%',
   classes: [
-    cls('stock', '股票', 25, '#3b82f6'),
-    cls('bond-long', '长期国债', 25, '#22c55e'),
-    cls('gold', '黄金', 25, '#f0b90b'),
-    cls('cash', '现金', 25, '#a1a1aa'),
+    cls('stock', '股票', 25, 'blue'),
+    cls('bond-long', '长期国债', 25, 'green'),
+    cls('gold', '黄金', 25, 'gold'),
+    cls('cash', '现金', 25, 'slate'),
   ],
 }
 
@@ -71,7 +71,7 @@ const CLASSIC_60_40: Strategy = {
   name: '经典 60/40',
   kind: 'builtin',
   description: '股票 60% / 债券 40%',
-  classes: [cls('stock', '股票', 60, '#3b82f6'), cls('bond', '债券', 40, '#22c55e')],
+  classes: [cls('stock', '股票', 60, 'blue'), cls('bond', '债券', 40, 'green')],
 }
 
 export const BUILTIN_STRATEGIES: Strategy[] = [ALL_WEATHER, PERMANENT, CLASSIC_60_40]
@@ -171,8 +171,8 @@ export function createCustomStrategy(name = '我的策略', description = '自�
     kind: 'custom',
     description,
     classes: [
-      { id: 'stock', name: '股票', target: 50, color: CLASS_COLORS[0] },
-      { id: 'bond', name: '债券', target: 50, color: CLASS_COLORS[1] },
+      { id: 'stock', name: '股票', target: 50, color: accentVar('blue'), colorName: 'blue' },
+      { id: 'bond', name: '债券', target: 50, color: accentVar('green'), colorName: 'green' },
     ],
   }
 }

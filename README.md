@@ -26,6 +26,8 @@ pnpm install && pnpm dev
 | 增删改查 | 点击卡片打开底部详情面板，可添加 / 编辑 / 删除条目，卡片可上下排序、可改名换图标换主题色、可删除或新建分类 |
 | 基金实时估值 | 录入基金代码 + 持有份额 + 成本单价，自动拉取最新净值 / 盘中估值，计算市值与浮动盈亏并按红涨绿跌高亮 |
 | **投资策略与再平衡** | 内置全天候 / 永久组合 / 经典 60/40，支持自定义策略；自动把资产分类映射到策略资产类别，算出实际占比、偏离度、总偏离率与组合健康度，并给出「卖多少 / 买多少」的具体金额建议 |
+| **双主题** | 默认跟随系统（iOS 的日落自动切换也能响应），也可手动固定日间 / 夜间；选择持久化，首屏有防闪白处理 |
+| **可添加到主屏幕（PWA）** | iOS Safari「分享 → 添加到主屏幕」后全屏无地址栏打开，有独立图标与名称；Android/桌面浏览器会提示安装 |
 | 数据持久化 | 每次改动立即写入 `localStorage`，刷新 / 关掉浏览器都不丢；支持导出 / 导入 JSON 备份 |
 | 隐私 | 无账号、无埋点、无后端，可离线打开（仅基金估值需要联网） |
 
@@ -52,6 +54,8 @@ pnpm install && pnpm dev
 - **Tailwind CSS 3**（自定义暗色卡片样式、`rounded-card` 等）
 - **Lucide React** 图标
 - **Recharts** 绘制「目标占比 vs 实际占比」对比图（懒加载，不拖慢首屏）
+- **CSS 变量 + Tailwind 语义色**实现双主题（不用重写组件，只换 token）
+- **PWA**：`manifest.webmanifest` + iOS 专属 meta + 脚本生成的 PNG 图标
 - **localStorage** 作为唯一数据源（带 Schema 规范化与损坏数据自愈）
 - **Vitest** 单元测试 + 真实接口集成测试
 
@@ -127,7 +131,11 @@ touch dist/.nojekyll   # 需要时避免 Jekyll 忽略下划线开头的资源
 ```
 WealthCard/
 ├─ .github/workflows/deploy.yml   # GitHub Pages 自动部署
-├─ public/favicon.svg
+├─ public/
+│  ├─ favicon.svg
+│  ├─ manifest.webmanifest        # PWA 清单
+│  └─ icons/                      # 桌面图标（脚本生成，含 maskable）
+├─ scripts/gen-icons.cjs          # 用 Chromium 生成 PNG 图标
 ├─ src/
 │  ├─ App.tsx                     # 页面装配：顶部总览 + 卡片列表 + 弹窗
 │  ├─ components/
@@ -145,7 +153,8 @@ WealthCard/
 │  │  └─ Toast.tsx                # 轻提示
 │  ├─ hooks/
 │  │  ├─ usePortfolio.ts          # 状态 + 持久化 + 行情同步（reducer）
-│  │  └─ useStrategy.ts           # 策略配置持久化 + 再平衡结果
+│  │  ├─ useStrategy.ts           # 策略配置持久化 + 再平衡结果
+│  │  └─ useTheme.ts              # 主题（跟随系统 / 日间 / 夜间）
 │  ├─ lib/
 │  │  ├─ calc.ts                  # 估值 / 汇总 / 数值解析 / 基金类型识别（纯函数）
 │  │  ├─ strategies.ts            # 内置策略定义、默认映射、策略校验
@@ -280,6 +289,62 @@ https://fundgz.1234567.com.cn/js/{基金代码}.js?rt={时间戳}
 
 ---
 
+## 🎨 主题（日间 / 夜间）
+
+默认**跟随系统**：iOS/Android 的自动深色、macOS 的日落切换都会实时响应。顶部工具栏第一个按钮可以循环切换
+`跟随系统 → 日间 → 夜间`，选择会写进 `localStorage`（键 `asset-card-wallet/theme`）。
+
+实现方式：**语义化 CSS 变量**，组件里不出现任何写死的颜色。
+
+```css
+:root, [data-theme='dark'] { --app:#000; --s1:#161616; --ink1:#fafafa; --up:#ff5a5f;  … }
+[data-theme='light']       { --app:#f5f5f4; --s1:#fff;   --ink1:#18181b; --up:#c62a1e; … }
+```
+
+| 变量组 | 用途 |
+| --- | --- |
+| `--app` `--s1`→`--s4` | 页面底色与四层表面（卡片 / 次级容器 / 输入框 / 键盘按键） |
+| `--ink1`→`--ink4` | 四级文字，从最重要到最次要 |
+| `--line` `--line-strong` | 细边框与强调边框 |
+| `--up` `--down` | 涨跌（白天主题下自动换成更深的红/绿，保证白底可读） |
+| `--warn` `--info` `--good` `--danger` | 超配 / 低配 / 正常 / 危险等状态 |
+| `--accent-*` + `--accent-*-soft` | 分类主题色与其半透明底色，随主题切换 |
+
+几个容易踩的点，都已处理：
+
+- **首屏防闪白**：`index.html` 里有一段同步内联脚本，在样式表之前就把 `data-theme` 定好，夜间用户不会先闪一帧浅色；
+- **原生控件**：同步设置 `color-scheme`，滚动条、`<select>`、日期选择器等跟随主题；下拉箭头是自绘的，避免系统箭头颜色不匹配；
+- **对比度**：两套主题的正文/次要文字/涨跌色都按 WCAG AA 校准过（白天最弱的次要文字 4.25:1，卡片上是 4.64:1）；
+- **分类颜色**：数据里存的是色名（`gold` / `blue`…）而不是 hex，所以白天主题下金色会变成深琥珀色，不会白底上糊成一片。
+
+## 📲 添加到主屏幕（PWA）
+
+**iPhone / iPad**：Safari 打开站点 → 底部「分享」→「添加到主屏幕」→ 桌面会出现 WealthCard 图标，
+点开后全屏运行，没有地址栏，状态栏颜色跟随主题。
+
+**Android / 桌面 Chrome**：地址栏会出现安装图标，或菜单里选「安装应用」。
+
+支持文件：
+
+| 文件 | 作用 |
+| --- | --- |
+| `public/manifest.webmanifest` | 应用名、`display: standalone`、192/512 图标、maskable 图标、快捷方式 |
+| `public/icons/apple-touch-icon.png` | iOS 桌面图标（180×180，**iOS 不读 manifest 里的图标**） |
+| `index.html` 里的 `apple-mobile-web-app-*` | 全屏、桌面名称、状态栏样式 |
+| `viewport-fit=cover` + `env(safe-area-inset-*)` | 适配刘海屏与底部横条 |
+
+图标不是手画的：`scripts/gen-icons.cjs` 用 Chromium 把同一份视觉稿渲染成 180/192/512 与 maskable 四种尺寸，
+改了配色重新跑一次即可（需要 playwright）：
+
+```bash
+node scripts/gen-icons.cjs
+```
+
+> 说明：本项目**没有 Service Worker**，因此不具备离线缓存能力——数据本来就在本地，断网也能看已有数据，
+> 但「添加到主屏幕」的离线启动不在目标内，避免引入缓存更新带来的复杂度。
+
+---
+
 ## 📱 响应式与交互
 
 - 移动端优先：整页最大宽度 `480px`，PC 上水平居中，模拟手机 App 观感
@@ -313,6 +378,15 @@ A：可动用资金只统计**能按比例卖出的标的**（目前是基金）
 
 **Q：基金被归错类别怎么办？**
 A：基金默认按名称关键词识别类型。识别不准时，在基金条目的编辑表单里可以手动标记为股票型 / 债券型等；也可以在「资产映射」里直接改整个「基金」分类的归属。
+
+**Q：我想固定用日间或夜间，不想跟随系统？**
+A：点顶部工具栏最左边的按钮循环切换「跟随系统 → 日间 → 夜间」，图标会跟着变（显示器 / 太阳 / 月亮），选择会记住。
+
+**Q：添加到主屏幕后数据还在吗？**
+A：在。主屏幕打开和 Safari 里打开是**同一个 origin、同一份 localStorage**，数据互通；但换设备/清浏览器数据仍会丢，记得定期导出 JSON。
+
+**Q：为什么没有离线缓存（Service Worker）？**
+A：数据本身就在本地，离线能看到已有内容；不做 SW 是为了避免「版本更新后仍读旧缓存」这类常见的坑。需要真正的离线启动可以再加。
 
 **Q：`pnpm install` 提示忽略了 esbuild 的构建脚本？**
 A：pnpm 10+ 默认拦截依赖的安装脚本，仓库里的 `pnpm-workspace.yaml` 与 `package.json` 的 `pnpm.onlyBuiltDependencies` 已放行 `esbuild`；若仍提示，执行 `pnpm approve-builds` 选择 esbuild 即可。

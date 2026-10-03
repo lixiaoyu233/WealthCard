@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Check, Info, Trash2 } from 'lucide-react'
 import type { Category } from '../types/asset'
-import { CATEGORY_COLORS, CATEGORY_TEMPLATES } from '../lib/defaults'
+import { CATEGORY_TEMPLATES } from '../lib/defaults'
+import { ACCENT_NAMES } from '../lib/strategies'
 import { ICON_NAMES, resolveIcon } from '../lib/icons'
 import Sheet from './Sheet'
 
@@ -9,7 +10,7 @@ interface CategoryFormProps {
   open: boolean
   /** 传入表示编辑分类 */
   initial?: Category | null
-  onSubmit: (patch: Pick<Category, 'name' | 'subtitle' | 'icon' | 'color' | 'isLiability'>) => void
+  onSubmit: (patch: Pick<Category, 'name' | 'subtitle' | 'icon' | 'color' | 'colorName' | 'isLiability'>) => void
   onDelete?: () => void
   onClose: () => void
 }
@@ -18,7 +19,7 @@ export default function CategoryForm({ open, initial, onSubmit, onDelete, onClos
   const [name, setName] = useState('')
   const [subtitle, setSubtitle] = useState('')
   const [icon, setIcon] = useState('wallet')
-  const [color, setColor] = useState(CATEGORY_COLORS[0])
+  const [colorName, setColorName] = useState<string | undefined>(ACCENT_NAMES[0])
   const [isLiability, setIsLiability] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -27,7 +28,10 @@ export default function CategoryForm({ open, initial, onSubmit, onDelete, onClos
     setName(initial?.name ?? '')
     setSubtitle(initial?.subtitle ?? '')
     setIcon(initial?.icon ?? 'wallet')
-    setColor(initial?.color ?? CATEGORY_COLORS[Math.floor(Math.random() * CATEGORY_COLORS.length)])
+    setColorName(
+      initial?.colorName ??
+        ACCENT_NAMES[Math.floor(Math.random() * ACCENT_NAMES.length)],
+    )
     setIsLiability(initial?.isLiability ?? false)
     setError(null)
   }, [open, initial])
@@ -36,7 +40,7 @@ export default function CategoryForm({ open, initial, onSubmit, onDelete, onClos
     setName(t.name)
     setSubtitle(t.subtitle)
     setIcon(t.icon)
-    setColor(t.color)
+    setColorName(t.colorName)
     setIsLiability(t.isLiability ?? false)
   }
 
@@ -45,7 +49,14 @@ export default function CategoryForm({ open, initial, onSubmit, onDelete, onClos
       setError('请填写分类名称')
       return
     }
-    onSubmit({ name: name.trim(), subtitle: subtitle.trim(), icon, color, isLiability })
+    onSubmit({
+      name: name.trim(),
+      subtitle: subtitle.trim(),
+      icon,
+      color: `var(--accent-${colorName ?? 'blue'})`,
+      colorName,
+      isLiability,
+    })
   }
 
   return (
@@ -80,7 +91,7 @@ export default function CategoryForm({ open, initial, onSubmit, onDelete, onClos
                   key={t.name}
                   type="button"
                   onClick={() => applyTemplate(t)}
-                  className="rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-[12px] text-zinc-300 transition hover:bg-white/[0.08] active:scale-95"
+                  className="rounded-full border border-line bg-s2 px-3 py-1.5 text-[12px] text-ink2 transition hover:bg-s3 active:scale-95"
                 >
                   {t.name}
                 </button>
@@ -117,9 +128,9 @@ export default function CategoryForm({ open, initial, onSubmit, onDelete, onClos
                   onClick={() => setIcon(key)}
                   aria-label={key}
                   className={`flex h-11 items-center justify-center rounded-xl border transition ${
-                    active ? 'border-white/25 bg-white/[0.09]' : 'border-white/[0.06] bg-white/[0.03] hover:bg-white/[0.07]'
+                    active ? 'border-line-strong bg-s3' : 'border-line bg-s2 hover:bg-s3'
                   }`}
-                  style={active ? { color } : { color: '#a1a1aa' }}
+                  style={active ? { color: `var(--accent-${colorName ?? 'blue'})` } : { color: 'var(--ink3)' }}
                 >
                   <Icon size={18} />
                 </button>
@@ -131,37 +142,43 @@ export default function CategoryForm({ open, initial, onSubmit, onDelete, onClos
         <div>
           <p className="field-label">主题色</p>
           <div className="flex flex-wrap gap-2.5">
-            {CATEGORY_COLORS.map((c) => (
-              <button
-                key={c}
-                type="button"
-                onClick={() => setColor(c)}
-                aria-label={`主题色 ${c}`}
-                className="flex h-8 w-8 items-center justify-center rounded-full border transition"
-                style={{ backgroundColor: `${c}33`, borderColor: color === c ? c : 'transparent' }}
-              >
-                {color === c ? <Check size={14} style={{ color: c }} /> : null}
-              </button>
-            ))}
+            {ACCENT_NAMES.map((name) => {
+              const active = colorName === name
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => setColorName(name)}
+                  aria-label={`主题色 ${name}`}
+                  className="flex h-8 w-8 items-center justify-center rounded-full border transition"
+                  style={{
+                    backgroundColor: `var(--accent-${name}-soft)`,
+                    borderColor: active ? `var(--accent-${name})` : 'transparent',
+                  }}
+                >
+                  {active ? <Check size={14} style={{ color: `var(--accent-${name})` }} /> : null}
+                </button>
+              )
+            })}
           </div>
         </div>
 
-        <label className="flex cursor-pointer items-center justify-between rounded-2xl border border-white/[0.06] bg-white/[0.02] px-3.5 py-3">
+        <label className="flex cursor-pointer items-center justify-between rounded-2xl border border-line bg-s2 px-3.5 py-3">
           <span>
-            <span className="block text-[13px] text-zinc-200">计入负债</span>
-            <span className="mt-0.5 block text-[11px] text-zinc-600">开启后该分类合计会从净资产中扣减</span>
+            <span className="block text-[13px] text-ink2">计入负债</span>
+            <span className="mt-0.5 block text-[11px] text-ink4">开启后该分类合计会从净资产中扣减</span>
           </span>
           <input
             type="checkbox"
             checked={isLiability}
             onChange={(e) => setIsLiability(e.target.checked)}
-            className="h-4 w-4 accent-red-500"
+            className="h-4 w-4 accent-brand"
           />
         </label>
 
-        {error ? <p className="text-[12px] text-red-400">{error}</p> : null}
+        {error ? <p className="text-[12px] tone-danger">{error}</p> : null}
 
-        <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-zinc-600">
+        <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-ink4">
           <Info size={12} className="mt-0.5 shrink-0" />
           分类与条目全部保存在浏览器 localStorage，不会上传到任何服务器。
         </p>

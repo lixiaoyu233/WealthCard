@@ -51,7 +51,8 @@ export function normalizePortfolio(raw: unknown): Portfolio | null {
       name: String(c.name || fallback?.name || '未命名分类'),
       subtitle: typeof raw0.subtitle === 'string' ? raw0.subtitle : (fallback?.subtitle ?? ''),
       icon: typeof raw0.icon === 'string' ? raw0.icon : (fallback?.icon ?? 'wallet'),
-      color: typeof raw0.color === 'string' ? raw0.color : (fallback?.color ?? '#3b82f6'),
+      color: typeof raw0.color === 'string' && raw0.color ? raw0.color : (fallback?.color ?? 'var(--accent-blue)'),
+      colorName: typeof raw0.colorName === 'string' ? raw0.colorName : fallback?.colorName,
       isLiability: raw0.isLiability === true,
       items,
     }

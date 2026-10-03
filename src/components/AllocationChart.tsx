@@ -32,9 +32,9 @@ export default function AllocationChart({ data }: { data: AllocationChartDatum[]
             width={74}
             axisLine={false}
             tickLine={false}
-            tick={{ fill: '#a1a1aa', fontSize: 11 }}
+            tick={{ fill: 'var(--chart-tick)', fontSize: 11 }}
           />
-          <ReferenceLine x={0} stroke="#27272a" />
+          <ReferenceLine x={0} stroke="var(--chart-grid)" />
           {/* 目标占比：细条 + 主题色半透明 */}
           <Bar dataKey="target" name="目标" barSize={6} radius={[0, 3, 3, 0]} isAnimationActive={false}>
             {data.map((d) => (
@@ -45,7 +45,7 @@ export default function AllocationChart({ data }: { data: AllocationChartDatum[]
               position="right"
               offset={6}
               formatter={(v: number) => `${v}%`}
-              style={{ fill: '#71717a', fontSize: 10 }}
+              style={{ fill: 'var(--chart-label)', fontSize: 10 }}
             />
           </Bar>
           {/* 实际占比：粗条 + 按偏离状态着色 */}
@@ -54,7 +54,7 @@ export default function AllocationChart({ data }: { data: AllocationChartDatum[]
               <Cell
                 key={`a-${d.classId}`}
                 // 超过 100% 的部分截断显示，避免柱子溢出绘图区
-                fill={d.state === 'sell' ? '#fbbf24' : d.state === 'buy' ? '#38bdf8' : d.color}
+                fill={d.state === 'sell' ? 'var(--warn)' : d.state === 'buy' ? 'var(--info)' : d.color}
               />
             ))}
             <LabelList
@@ -62,7 +62,7 @@ export default function AllocationChart({ data }: { data: AllocationChartDatum[]
               position="right"
               offset={6}
               formatter={(v: number) => `${v}%`}
-              style={{ fill: '#e4e4e7', fontSize: 10, fontWeight: 500 }}
+              style={{ fill: 'var(--ink1)', fontSize: 10, fontWeight: 500 }}
             />
           </Bar>
         </BarChart>

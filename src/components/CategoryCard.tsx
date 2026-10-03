@@ -35,7 +35,7 @@ export default function CategoryCard({ category, hidden, onOpen }: CategoryCardP
     <button
       type="button"
       onClick={() => onOpen(category)}
-      className="card-surface group block w-full px-4 py-3.5 text-left transition duration-200 hover:border-white/[0.12] active:scale-[0.985]"
+      className="card-surface group block w-full px-4 py-3.5 text-left transition duration-200 hover:border-line-strong active:scale-[0.985]"
     >
       {/* 分类主题色的极淡径向光晕，保持暗黑质感的同时呼应图标颜色 */}
       <span
@@ -47,33 +47,38 @@ export default function CategoryCard({ category, hidden, onOpen }: CategoryCardP
       <div className="relative flex items-center gap-3.5">
         <span
           className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[13px]"
-          style={{ backgroundColor: `${category.color}26`, color: category.color }}
+          style={{
+            backgroundColor: category.colorName
+              ? `var(--accent-${category.colorName}-soft)`
+              : 'var(--s2)',
+            color: category.color,
+          }}
         >
           <Icon size={20} strokeWidth={2} />
         </span>
 
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[15px] font-medium text-zinc-100">{category.name}</p>
-          <p className="mt-0.5 truncate text-[12px] text-zinc-500">{category.subtitle || '—'}</p>
+          <p className="truncate text-[15px] font-medium text-ink1">{category.name}</p>
+          <p className="mt-0.5 truncate text-[12px] text-ink4">{category.subtitle || '—'}</p>
         </div>
 
         <div className="flex shrink-0 flex-col items-end">
-          <span className="text-[16px] font-semibold tabular-nums text-zinc-100">
+          <span className="text-[16px] font-semibold tabular-nums text-ink1">
             {hidden ? '••••' : formatCNY(display)}
           </span>
           <span className="mt-1 inline-flex items-center gap-1.5">
-            {category.isLiability ? <CreditCard size={11} className="text-red-400/70" /> : null}
+            {category.isLiability ? <CreditCard size={11} className="tone-danger/70" /> : null}
             <span className="chip">{count}</span>
           </span>
         </div>
 
-        <ChevronRight size={16} className="shrink-0 text-zinc-700 transition group-hover:text-zinc-500" />
+        <ChevronRight size={16} className="shrink-0 text-ink4 transition group-hover:text-ink4" />
       </div>
 
       {hasFunds ? (
-        <div className="relative mt-2.5 flex items-center gap-1.5 border-t border-white/[0.05] pt-2.5 text-[11.5px]">
+        <div className="relative mt-2.5 flex items-center gap-1.5 border-t border-line pt-2.5 text-[11.5px]">
           {hidden ? (
-            <span className="text-zinc-600">持仓盈亏已隐藏</span>
+            <span className="text-ink4">持仓盈亏已隐藏</span>
           ) : (
             <>
               <span className={`inline-flex items-center gap-1 font-medium tabular-nums ${fundStats.profit >= 0 ? 'text-up' : 'text-down'}`}>
@@ -82,7 +87,7 @@ export default function CategoryCard({ category, hidden, onOpen }: CategoryCardP
                 {formatCNY(Math.abs(fundStats.profit))}
               </span>
               <span className={fundStats.profit >= 0 ? 'text-up/80' : 'text-down/80'}>{formatRate(profitRate)}</span>
-              <span className="text-zinc-600">持仓盈亏</span>
+              <span className="text-ink4">持仓盈亏</span>
             </>
           )}
         </div>

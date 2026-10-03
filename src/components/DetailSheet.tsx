@@ -91,14 +91,19 @@ export default function DetailSheet({
               type="button"
               onClick={() => setMode({ view: 'list' })}
               aria-label="返回列表"
-              className="-ml-1 mt-0.5 rounded-full p-1.5 text-zinc-400 transition hover:bg-white/[0.06] hover:text-zinc-100"
+              className="-ml-1 mt-0.5 rounded-full p-1.5 text-ink3 transition hover:bg-s3 hover:text-ink1"
             >
               <ArrowLeft size={17} />
             </button>
           ) : (
             <span
               className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
-              style={{ backgroundColor: `${category.color}26`, color: category.color }}
+              style={{
+                backgroundColor: category.colorName
+                  ? `var(--accent-${category.colorName}-soft)`
+                  : 'var(--s2)',
+                color: category.color,
+              }}
             >
               <Icon size={17} />
             </span>
@@ -130,13 +135,13 @@ export default function DetailSheet({
         {mode.view === 'list' ? (
           <div className="space-y-4">
             {/* 分类小计 */}
-            <div className="rounded-2xl border border-white/[0.07] bg-gradient-to-b from-white/[0.05] to-transparent px-4 py-3.5">
-              <p className="text-[11px] text-zinc-500">{category.isLiability ? '负债合计' : '分类合计'}</p>
-              <p className="mt-1 text-[26px] font-semibold leading-none tabular-nums text-zinc-50">
+            <div className="rounded-2xl border border-line bg-gradient-to-b from-s2 to-transparent px-4 py-3.5">
+              <p className="text-[11px] text-ink4">{category.isLiability ? '负债合计' : '分类合计'}</p>
+              <p className="mt-1 text-[26px] font-semibold leading-none tabular-nums text-ink1">
                 {formatCNY(displayTotal)}
-                <span className="ml-1 text-[12px] font-normal text-zinc-500">元</span>
+                <span className="ml-1 text-[12px] font-normal text-ink4">元</span>
               </p>
-              <p className="mt-2 text-[11px] text-zinc-600">
+              <p className="mt-2 text-[11px] text-ink4">
                 共 {category.items.length} 条记录
                 {hasFunds ? ' · 基金行情随刷新自动更新' : ''}
               </p>
@@ -144,12 +149,12 @@ export default function DetailSheet({
 
             {/* 条目列表 */}
             {category.items.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-white/[0.08] px-4 py-8 text-center">
-                <p className="text-[13px] text-zinc-500">还没有记录</p>
-                <p className="mt-1 text-[11px] text-zinc-600">点击下方「添加条目」开始登记资产</p>
+              <div className="rounded-2xl border border-dashed border-line px-4 py-8 text-center">
+                <p className="text-[13px] text-ink4">还没有记录</p>
+                <p className="mt-1 text-[11px] text-ink4">点击下方「添加条目」开始登记资产</p>
               </div>
             ) : (
-              <ul className="divide-y divide-white/[0.05] overflow-hidden rounded-2xl border border-white/[0.06]">
+              <ul className="divide-y divide-line overflow-hidden rounded-2xl border border-line">
                 {category.items.map((item) => (
                   <ItemRow
                     key={item.id}
@@ -162,7 +167,7 @@ export default function DetailSheet({
             )}
 
             {/* 分类级操作 */}
-            <div className="flex items-center justify-between rounded-2xl border border-white/[0.06] px-3.5 py-3">
+            <div className="flex items-center justify-between rounded-2xl border border-line px-3.5 py-3">
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
@@ -182,7 +187,7 @@ export default function DetailSheet({
                 >
                   <ArrowDown size={14} />
                 </button>
-                <span className="ml-1 text-[11px] text-zinc-600">调整卡片顺序</span>
+                <span className="ml-1 text-[11px] text-ink4">调整卡片顺序</span>
               </div>
               <button type="button" className="btn-danger px-3 py-2 text-[13px]" onClick={() => setPendingDelete({ type: 'category' })}>
                 <Trash2 size={14} /> 删除分类
@@ -190,13 +195,13 @@ export default function DetailSheet({
             </div>
 
             {category.isLiability ? (
-              <label className="flex cursor-pointer items-center justify-between rounded-2xl border border-white/[0.06] px-3.5 py-3">
-                <span className="text-[13px] text-zinc-300">按负债计入净资产（扣减）</span>
+              <label className="flex cursor-pointer items-center justify-between rounded-2xl border border-line px-3.5 py-3">
+                <span className="text-[13px] text-ink2">按负债计入净资产（扣减）</span>
                 <input
                   type="checkbox"
                   checked={category.isLiability === true}
                   onChange={(e) => onUpdateCategory(category.id, { isLiability: e.target.checked })}
-                  className="h-4 w-4 accent-red-500"
+                  className="h-4 w-4 accent-brand"
                 />
               </label>
             ) : null}
@@ -241,11 +246,11 @@ function ItemRow({ item, onEdit, onDelete }: { item: AssetItem; onEdit: () => vo
   const liveNav = quote?.estimatedNav ?? quote?.publishedNav
 
   return (
-    <li className="bg-white/[0.015] transition hover:bg-white/[0.04]">
+    <li className="bg-s2 transition hover:bg-s2">
       <div className="flex items-center gap-3 px-3.5 py-3">
         <button type="button" onClick={onEdit} className="min-w-0 flex-1 text-left">
-          <p className="truncate text-[14px] text-zinc-100">{item.name || '未命名'}</p>
-          <p className="mt-0.5 truncate text-[11.5px] text-zinc-500">
+          <p className="truncate text-[14px] text-ink1">{item.name || '未命名'}</p>
+          <p className="mt-0.5 truncate text-[11.5px] text-ink4">
             {fund ? (
               <>
                 {item.code} · {formatQty(item.shares)} 份 · 成本 {formatNav(item.costNav)}
@@ -262,13 +267,13 @@ function ItemRow({ item, onEdit, onDelete }: { item: AssetItem; onEdit: () => vo
         </button>
 
         <button type="button" onClick={onEdit} className="shrink-0 text-right">
-          <p className="text-[14.5px] font-medium tabular-nums text-zinc-100">{formatCNY(v.value)}</p>
+          <p className="text-[14.5px] font-medium tabular-nums text-ink1">{formatCNY(v.value)}</p>
           {fund && v.profit !== undefined ? (
             <p className={`mt-0.5 text-[11.5px] tabular-nums ${v.profit >= 0 ? 'text-up' : 'text-down'}`}>
               {formatSigned(v.profit)}（{formatRate(v.profitRate)}）
             </p>
           ) : (
-            <p className="mt-0.5 text-[11.5px] text-zinc-600">{quote ? `${formatRelative(quote.fetchedAt)}更新` : '元'}</p>
+            <p className="mt-0.5 text-[11.5px] text-ink4">{quote ? `${formatRelative(quote.fetchedAt)}更新` : '元'}</p>
           )}
         </button>
 
@@ -276,7 +281,7 @@ function ItemRow({ item, onEdit, onDelete }: { item: AssetItem; onEdit: () => vo
           type="button"
           onClick={onDelete}
           aria-label="删除条目"
-          className="shrink-0 rounded-full p-2 text-zinc-600 transition hover:bg-red-500/10 hover:text-red-400"
+          className="shrink-0 rounded-full p-2 text-ink4 transition hover:bg-danger/10 hover:tone-danger"
         >
           <Trash2 size={14} />
         </button>
