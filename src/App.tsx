@@ -6,6 +6,8 @@ import { isFund, valuate } from './lib/calc'
 import { exportPortfolio } from './lib/storage'
 import { formatCNY, formatRate, formatRelative, formatSigned } from './lib/format'
 import Header from './components/Header'
+import ReadOnlyBanner from './components/ReadOnlyBanner'
+import { isReadOnlyMode, readOnlyMessage } from './lib/readOnly'
 import CategoryCard from './components/CategoryCard'
 import DetailSheet from './components/DetailSheet'
 import CategoryForm from './components/CategoryForm'
@@ -246,6 +248,9 @@ export default function App() {
             <span>{storageError}</span>
           </div>
         ) : null}
+
+        {/* Phase 8 / W1：只读模式常驻提示（不可关闭） */}
+        {isReadOnlyMode() ? <ReadOnlyBanner message={readOnlyMessage() || undefined} /> : null}
 
         {recovered ? (
           <div className="mt-4 flex items-start gap-2 rounded-2xl border border-line bg-s2 px-3.5 py-2.5 text-[12px] text-ink2">

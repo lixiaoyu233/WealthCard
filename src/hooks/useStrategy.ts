@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Portfolio } from '../types/asset'
 import type { CategoryMapping, MappingEntry, Strategy, StrategySettings, StrategyId } from '../types/strategy'
 import { cloneStrategy, createCustomStrategy } from '../lib/strategies'
+import { isReadOnlyMode } from '../lib/readOnly'
+import { getPreloadedStrategySettings } from '../lib/db/migrateOnStart'
 import {
   createDefaultSettings,
   defaultMappingFor,
@@ -107,7 +109,20 @@ export function normalizeSettings(raw: unknown): StrategySettings {
   }
 }
 
+/**
+ * 读取策略设置（Phase 8 / W1）。
+ *
+ * 优先级：
+ * 1. **IndexedDB 迁移结果**（`AllocationProfile` 反向还原，由启动流程注入）
+ * 2. localStorage 副本（仅在没有 IndexedDB 数据时回退）
+ *
+ * 为什么必须优先 IndexedDB：W1 已把目标配置的事实源迁到 `AllocationProfile`。
+ * 若这里继续读 localStorage 副本，localStorage 就仍是业务读取来源 ——
+ * 与「单一事实源」目标冲突，且用户在两个地方看到的数据可能不一致。
+ */
 function loadSettings(): StrategySettings {
+  const injected = getPreloadedStrategySettings()
+  if (injected) return injected
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY)
     if (!raw) return createDefaultSettings()
@@ -117,7 +132,19 @@ function loadSettings(): StrategySettings {
   }
 }
 
+/**
+ * 持久化策略设置（Phase 8 / W1）。
+ *
+ * ⚠️ 只读模式下**拒绝写入**并返回原因。
+ *
+ * 原因：目标配置已迁入 IndexedDB 的 `AllocationProfile`。
+ * 这里的 localStorage 副本属于**业务事实**，W1 必须断写 ——
+ * 否则用户在旧界面改一次策略，就会重新产生一个分叉的数据源。
+ */
 function persist(settings: StrategySettings): string | null {
+  if (isReadOnlyMode()) {
+    return '只读模式：目标配置已迁移到 IndexedDB，旧版界面暂不能修改策略'
+  }
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
     return null

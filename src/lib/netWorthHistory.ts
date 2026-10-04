@@ -14,6 +14,7 @@
 
 import type { Portfolio } from '../types/asset'
 import { summarize } from './calc'
+import { shouldSkipBusinessWrite } from './readOnly'
 import type { FxRates } from './currency'
 
 export const SNAPSHOT_STORAGE_KEY = 'asset-card-wallet/networth-history/v1'
@@ -126,6 +127,21 @@ export function loadSnapshot(): SnapshotFile {
 }
 
 export function saveSnapshot(file: SnapshotFile): string | null {
+  /*
+   * 月度走势属于业务事实（资产历史），Phase 8 / W1 起由 IndexedDB 的
+   * Snapshot 表承接，因此只读模式下拒绝写入。
+   *
+   * ⚠️ 这里**返回错误字符串而不是抛出**。
+   * 原因：`saveSnapshot` 会在 reducer 的副作用里被调用
+   * （`usePortfolio` 的 `takeSnapshot` → `dispatch`），
+   * 异常会从 `dispatch` **同步逃逸**并让整个应用白屏 ——
+   * 实测确认过。业务语义上「返回失败原因」与「抛异常」等价，
+   * 但不会把一次写入失败升级成应用崩溃。
+   * 仍会显式上报错误（不静默），符合「禁止假成功」的要求。
+   */
+  if (shouldSkipBusinessWrite()) {
+    return '只读模式：月度走势已由 IndexedDB 的 Snapshot 承接，不再写入 localStorage'
+  }
   try {
     window.localStorage.setItem(SNAPSHOT_STORAGE_KEY, JSON.stringify(file))
     return null

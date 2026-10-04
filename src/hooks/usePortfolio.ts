@@ -13,6 +13,8 @@ import { collectCurrencies, collectFundCodes, fxExposure, isFund, safeNum, summa
 /** 允许的行情代码：境内基金 6 位数字，或美股字母 / 港股数字 */
 const STOCK_CODE_RE = /^[A-Za-z][A-Za-z.\-]{0,5}$|^\d{1,5}$/
 import { loadPortfolio, savePortfolio } from '../lib/storage'
+import { ReadOnlyViolationError, isReadOnlyMode, readOnlyMessage } from '../lib/readOnly'
+import { getPreloadedLegacyView } from '../lib/db/toLegacyView'
 import { describeRates, hasUsableRates, isFxStale, type CurrencyCode, type FxRates } from '../lib/currency'
 import type { HoldingMarket } from '../lib/usStock'
 import { fetchRates, loadCachedRates } from '../lib/fx'
@@ -162,7 +164,23 @@ export interface SyncState {
   source?: string
 }
 
-const initialLoad = loadPortfolio()
+/**
+ * 初始数据来源（Phase 8 / W1）
+ *
+ * 优先使用启动时注入的 2.0 投影结果；没有时回退到 localStorage。
+ *
+ * 注意 fallback 的理由：迁移失败时**不开启只读**（旧 UI 保持可写），
+ * 此时必须继续从 localStorage 读，否则用户会看到空数据却还能编辑。
+ */
+function resolveInitialLoad() {
+  const preloaded = getPreloadedLegacyView()
+  if (preloaded) {
+    return { portfolio: preloaded, error: null as string | null, recovered: false, addedCategories: undefined }
+  }
+  return loadPortfolio()
+}
+
+const initialLoad = resolveInitialLoad()
 
 /**
  * 组合状态与持久化，并统一负责汇率。
@@ -185,11 +203,41 @@ export function usePortfolio() {
   const [fxError, setFxError] = useState<string | undefined>()
   const fxInFlight = useRef(false)
 
-  /* ---------- 持久化：任何变更都写入 localStorage ---------- */
+  /*
+   * ---------- 持久化：任何变更都写入 localStorage ----------
+   *
+   * Phase 8 / W1：只读模式下 `savePortfolio` 会抛 `ReadOnlyViolationError`。
+   * 这里做**防御性兜底** —— 正常流程下变更函数已在入口拦住（见 `guardMutation`），
+   * 不会走到这里。若仍然走到，说明有遗漏的写入路径，必须显式暴露而不是静默。
+   */
   useEffect(() => {
-    const err = savePortfolio(portfolio)
-    if (err) setStorageError(err)
+    if (isReadOnlyMode()) return
+    try {
+      const err = savePortfolio(portfolio)
+      if (err) setStorageError(err)
+    } catch (e) {
+      if (e instanceof ReadOnlyViolationError) {
+        setStorageError(readOnlyMessage())
+        return
+      }
+      throw e
+    }
   }, [portfolio])
+
+  /**
+   * 禁止「假成功」的核心守卫。
+   *
+   * 为什么必须在**变更函数入口**拦截，而不是等持久化 effect 失败：
+   * reducer 一旦 dispatch，React state 立刻变成新值，界面看起来「保存成功」了 ——
+   * 即使随后 localStorage 写入失败，用户也已经看到假数据。
+   *
+   * 因此：只读模式下**先拒绝，再不动 state**，并给出明确提示。
+   */
+  const blockedByReadOnly = useCallback((): boolean => {
+    if (!isReadOnlyMode()) return false
+    setStorageError(readOnlyMessage())
+    return true
+  }, [])
 
   const foreignCurrencies = useMemo(() => collectCurrencies(portfolio), [portfolio])
   const hasForeign = foreignCurrencies.length > 0
@@ -238,6 +286,8 @@ export function usePortfolio() {
   /** 记录当日净资产快照，用于「较上次」变化提示 */
   const takeSnapshot = useCallback(
     (p: Portfolio) => {
+      // 只读模式下月度走势已由 IndexedDB 的 Snapshot 承接，不再写 localStorage
+      if (isReadOnlyMode()) return
       const s = summarize(p, rates)
       dispatch({
         type: 'snapshot',
@@ -306,6 +356,8 @@ export function usePortfolio() {
 
   /** 记录快照（净资产变化时）。汇率未就绪时跳过，避免把未折算的数字写进历史 */
   useEffect(() => {
+    // 只读模式下月度走势已由 IndexedDB 的 Snapshot 承接，不再写 localStorage
+    if (isReadOnlyMode()) return
     // 汇率未就绪时写入的快照会把外币按原币数值记账，等折算完成再写
     if (!fxReady) return
     const timer = window.setTimeout(() => takeSnapshot(portfolio), 1200)
@@ -315,6 +367,7 @@ export function usePortfolio() {
 
   /* ---------- 分类操作 ---------- */
   const addCategory = useCallback((patch?: Partial<Category>) => {
+    if (blockedByReadOnly()) return null
     const category: Category = {
       id: uid('cat'),
       name: patch?.name?.trim() || '新分类',
@@ -326,38 +379,68 @@ export function usePortfolio() {
     }
     dispatch({ type: 'addCategory', category })
     return category.id
-  }, [])
+  }, [blockedByReadOnly])
 
   const updateCategory = useCallback(
-    (id: string, patch: Partial<Omit<Category, 'items' | 'id'>>) => dispatch({ type: 'updateCategory', id, patch }),
-    [],
+    (id: string, patch: Partial<Omit<Category, 'items' | 'id'>>) => {
+      if (blockedByReadOnly()) return
+      dispatch({ type: 'updateCategory', id, patch })
+    },
+    [blockedByReadOnly],
   )
-  const removeCategory = useCallback((id: string) => dispatch({ type: 'removeCategory', id }), [])
-  const moveCategory = useCallback((id: string, dir: -1 | 1) => dispatch({ type: 'moveCategory', id, dir }), [])
+  const removeCategory = useCallback(
+    (id: string) => {
+      if (blockedByReadOnly()) return
+      dispatch({ type: 'removeCategory', id })
+    },
+    [blockedByReadOnly],
+  )
+  const moveCategory = useCallback(
+    (id: string, dir: -1 | 1) => {
+      if (blockedByReadOnly()) return
+      dispatch({ type: 'moveCategory', id, dir })
+    },
+    [blockedByReadOnly],
+  )
 
   /* ---------- 条目操作 ---------- */
-  const addItem = useCallback((categoryId: string, item: AssetItem) => dispatch({ type: 'addItem', categoryId, item }), [])
+  const addItem = useCallback(
+    (categoryId: string, item: AssetItem) => {
+      if (blockedByReadOnly()) return
+      dispatch({ type: 'addItem', categoryId, item })
+    },
+    [blockedByReadOnly],
+  )
 
   /**
    * 新增条目并同时从某个现金项目扣款。
    * 用于「买入基金时从现金划拨」：基金 +X，现金 −X，净资产不变。
    */
   const addFundedItem = useCallback(
-    (categoryId: string, item: AssetItem, sourceCategoryId: string, sourceItemId: string, amount: number) =>
-      dispatch({ type: 'addFundedItem', categoryId, item, sourceCategoryId, sourceItemId, amount }),
-    [],
+    (categoryId: string, item: AssetItem, sourceCategoryId: string, sourceItemId: string, amount: number) => {
+      if (blockedByReadOnly()) return
+      dispatch({ type: 'addFundedItem', categoryId, item, sourceCategoryId, sourceItemId, amount })
+    },
+    [blockedByReadOnly],
   )
   const updateItem = useCallback(
-    (categoryId: string, item: AssetItem) => dispatch({ type: 'updateItem', categoryId, itemId: item.id, item }),
-    [],
+    (categoryId: string, item: AssetItem) => {
+      if (blockedByReadOnly()) return
+      dispatch({ type: 'updateItem', categoryId, itemId: item.id, item })
+    },
+    [blockedByReadOnly],
   )
   const removeItem = useCallback(
-    (categoryId: string, itemId: string) => dispatch({ type: 'removeItem', categoryId, itemId }),
-    [],
+    (categoryId: string, itemId: string) => {
+      if (blockedByReadOnly()) return
+      dispatch({ type: 'removeItem', categoryId, itemId })
+    },
+    [blockedByReadOnly],
   )
 
   /** 清空全部数据，恢复默认分类 */
   const resetAll = useCallback(() => {
+    if (blockedByReadOnly()) return
     dispatch({
       type: 'replace',
       portfolio: { version: SCHEMA_VERSION, categories: createDefaultCategories(), history: [] },
@@ -365,7 +448,13 @@ export function usePortfolio() {
     setRecovered(false)
   }, [])
 
-  const importPortfolio = useCallback((p: Portfolio) => dispatch({ type: 'replace', portfolio: p }), [])
+  const importPortfolio = useCallback(
+    (p: Portfolio) => {
+      if (blockedByReadOnly()) return
+      dispatch({ type: 'replace', portfolio: p })
+    },
+    [blockedByReadOnly],
+  )
 
   return {
     portfolio,
