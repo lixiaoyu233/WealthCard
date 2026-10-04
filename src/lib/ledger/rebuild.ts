@@ -267,7 +267,7 @@ export function rebuildHoldingFromTransactions(
 /**
  * 把孤立持仓纳入账本：生成一条 `adjustment`，使交易能够解释该持仓。
  *
- * 这是「补期初余额」的推荐做法 —— 不直接改 Holding，而是**留痕**。
+ * 这是「补期初余额」的稳妥做法 —— 不直接改 Holding，而是**留痕**。
  */
 export function adoptOrphanHolding(
   portfolio: Portfolio2,

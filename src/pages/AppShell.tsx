@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Home, Layers, PieChart, TrendingUp, Settings as SettingsIcon } from 'lucide-react'
+import { Home, Layers, PieChart, Plus, TrendingUp, Settings as SettingsIcon } from 'lucide-react'
 import { useMemo } from 'react'
 import { usePortfolio2 } from '../hooks/usePortfolio2'
 import { createDexieRepository } from '../lib/db/dexieRepository'
@@ -9,6 +9,7 @@ import AssetsPage from './AssetsPage'
 import AnalysisTab from './AnalysisTab'
 import HistoryTab from './HistoryTab'
 import SettingsTab from './SettingsTab'
+import TransactionSheet from '../components/TransactionSheet'
 
 /**
  * W3 正式应用外壳
@@ -84,6 +85,7 @@ export default function AppShell({
   repo?: PortfolioRepository
 }) {
   const [tab, setTab] = useState<AppTab>(initialTab ?? readTabPref())
+  const [txOpen, setTxOpen] = useState(false)
   // 仓储只建一次，并向所有子组件注入同一实例（避免读写不同实例）
   const activeRepo = useMemo(() => repo ?? createDexieRepository(), [repo])
   const { data, loading, error, daily, reload } = usePortfolio2(activeRepo)
@@ -138,7 +140,7 @@ export default function AppShell({
         ) : tab === 'analysis' ? (
           <AnalysisTab analysis={data.analysis} duplicates={data.duplicates} />
         ) : tab === 'history' ? (
-          <HistoryTab trend={data.trend} />
+          <HistoryTab trend={data.trend} portfolio={data.portfolio} />
         ) : (
           <SettingsTab
             portfolio={data.portfolio}
@@ -148,6 +150,28 @@ export default function AppShell({
           />
         )}
       </div>
+
+      {/* 全局「记一笔」入口 */}
+      <button
+        type="button"
+        onClick={() => setTxOpen(true)}
+        className="fixed bottom-[calc(env(safe-area-inset-bottom)+62px)] left-1/2 z-40 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-ink px-4 py-2.5 text-[13px] text-s1 shadow-lg"
+        data-testid="fab-record"
+        aria-label="记一笔"
+      >
+        <Plus size={15} />
+        记一笔
+      </button>
+
+      {txOpen && data ? (
+        <TransactionSheet
+          open
+          onClose={() => setTxOpen(false)}
+          portfolio={data.portfolio}
+          repo={activeRepo}
+          onChanged={handleChanged}
+        />
+      ) : null}
 
       {/* 底部导航 */}
       <nav
