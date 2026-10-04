@@ -84,19 +84,40 @@ export function buildSnapshot(
     // 汇率：CNY 恒为 1；外币取实际可用汇率（缺失则不写数字，标 unreliable）
     const resolved = currency === 'CNY' ? 1 : resolveRate(fx, currency, 'CNY', { now: options.now })?.rate
 
-    /*
-     * 原币价值与单价：
-     * - available / stale 都可能有原币价值（stale 用「上次已知价值」作为展示依据）；
-     * - 现金与手动口径的单价恒为 1（数量即金额）。
-     */
     const isCash = instrument?.instrumentType === 'cash' || instrument?.assetClass === 'cash'
-    const nativeValue = r.valueInCurrency ?? r.fallbackValueInCurrency ?? 0
+
+    /*
+     * ## 原币价值与单价（Schema V7 起不再用数字伪造缺失）
+     *
+     * V7 之前的写法是：
+     * ```
+     * const nativeValue = r.valueInCurrency ?? r.fallbackValueInCurrency ?? 0
+     * price: round2(price) || 1
+     * valueCny: reliable && r.value !== undefined ? round2(r.value) : 0
+     * ```
+     * 这会把「不可估值」写成 `0` / `1`，**违反核心不变量「不可估值 ≠ 价值为 0」**：
+     * 一个 `valueCny: 0` 的持仓脱离 `reliable` 标记后，与「真的不值钱」无法区分。
+     *
+     * 现在的规则：
+     * - 有可用原币价值（ok / stale）→ 如实写；
+     * - 无可用价值 → `price` / `valueCny` 写 **`undefined`**，靠 `reliable: false` 表达；
+     * - 现金与手动口径的单价确实是 1（数量即金额），那不是伪造而是事实。
+     */
+    /*
+     * ⚠️ `price` **只来自真实可用估值**（`valueInCurrency`），
+     * 绝不使用 `fallbackValueInCurrency`。
+     *
+     * 后者是引擎给出的**成本价线索**（缺行情时的展示兜底）。
+     * 若用它算单价，快照里就会出现一个「看起来有价格、却无法证明来源」的数字 ——
+     * 这正是 W6 审计指出的问题（例：成本 1000 / 100 股 → price 10，
+     * 与真实市价 10 在快照里完全无法区分）。
+     */
     const price =
       holding.valuationMode === 'manual' || isCash
         ? 1
-        : holding.quantity
-          ? nativeValue / holding.quantity
-          : 0
+        : r.valueInCurrency !== undefined && holding.quantity
+          ? r.valueInCurrency / holding.quantity
+          : undefined
 
     const reliable = r.status === 'ok'
     if (r.status === 'unavailable') unavailableCount += 1
@@ -130,11 +151,12 @@ export function buildSnapshot(
       instrumentId: holding.instrumentId,
       accountId: holding.accountId,
       quantity,
-      price: round2(price) || 1,
+      price: price === undefined ? undefined : round2(price),
       currency,
-      // 汇率缺失时不写 1 冒充；CNY 恒为 1
-      rateToCny: resolved ?? (currency === 'CNY' ? 1 : 0),
-      valueCny: reliable && r.value !== undefined ? round2(r.value) : 0,
+      // 汇率不可解析 → undefined（既不写 1 冒充，也不写 0）；CNY 恒为 1
+      rateToCny: resolved,
+      // 不可估值 → undefined（**绝不写 0**）
+      valueCny: reliable && r.value !== undefined ? round2(r.value) : undefined,
       reliable,
       assetClassAtCapture: classAtCapture,
     })

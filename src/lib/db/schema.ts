@@ -10,7 +10,7 @@
  * | `LEGACY_PORTFOLIO_VERSION` | **旧应用数据版本**：1.x 时期 `Portfolio.version`，旧数据里就是 `2` | `2` |
  * | `PORTFOLIO_SCHEMA_VERSION` | **新持久化 Schema 版本**：accounts/holdings/… 这套结构 | `6` |
  *
- * 因此迁移链条是 **Legacy V2 → V3 → V4 → V5 → V6**。
+ * 因此迁移链条是 **Legacy V2 → V3 → V4 → V5 → V6 → V7**。
  *
  * ### V3 → V4 的唯一变更
  *
@@ -37,13 +37,24 @@ import type { IsoDateTime } from '../../types/portfolio2'
 export const LEGACY_PORTFOLIO_VERSION = 2
 
 /** 新持久化 Schema 版本 */
-export const PORTFOLIO_SCHEMA_VERSION = 6
+export const PORTFOLIO_SCHEMA_VERSION = 7
 
 /** 引入 Snapshot.captureKind 的版本（v4 及以前没有该字段） */
 export const SCHEMA_VERSION_WITH_CAPTURE_KIND = 5
 
 /** 引入 Transaction.status（作废机制）的版本（v5 及以前没有该字段） */
 export const SCHEMA_VERSION_WITH_TRANSACTION_STATUS = 6
+
+/**
+ * 引入「不可估值字段可缺失」的版本（Schema V7）。
+ *
+ * 从 V7 起 `SnapshotPosition` 的 `price` / `rateToCny` / `valueCny` 可以为 `undefined`，
+ * 表示「不可估值 / 汇率不可解析」，**不再用 0 或 1 伪造**。
+ *
+ * 为什么必须区分：`valueCny: 0` 脱离 `reliable` 标记后与「真的不值钱」无法区分，
+ * 违反核心不变量「不可估值 ≠ 价值为 0」。
+ */
+export const SCHEMA_VERSION_WITH_NULLABLE_VALUATION = 7
 
 /** 引入 assetClassAtCapture 的版本（v3 及以前没有该字段） */
 export const SCHEMA_VERSION_WITH_ASSET_CLASS_AT_CAPTURE = 4
@@ -157,17 +168,26 @@ export function migrationIdFor(source: number, target: number): string {
  */
 export const SCHEMA_V4_TO_V5_MIGRATION_ID = 'schema-v4-to-v5-capture-kind'
 export const SCHEMA_V5_TO_V6_MIGRATION_ID = 'schema-v5-to-v6-transaction-status'
+export const SCHEMA_V6_TO_V7_MIGRATION_ID = 'schema-v6-to-v7-nullable-valuation'
 
 export const MIGRATION_CHAIN: readonly string[] = [
-  'legacy-v2-to-schema-v3',
+  /*
+   * ⚠️ 首项必须与运行时实际写入的 id **一致**：
+   * `migrate()` 用 `migrationIdFor(LEGACY_PORTFOLIO_VERSION, PORTFOLIO_SCHEMA_VERSION)`。
+   * 早期这里硬编码为 `legacy-v2-to-schema-v3`，一旦 Schema 版本升到 V7
+   * 就与真实记录不符 —— 常量与运行时会静默分叉。
+   * 因此改为由同一个函数推导，彻底消除不一致。
+   */
+  migrationIdFor(LEGACY_PORTFOLIO_VERSION, PORTFOLIO_SCHEMA_VERSION),
   SCHEMA_V3_TO_V4_MIGRATION_ID,
   SCHEMA_V4_TO_V5_MIGRATION_ID,
   SCHEMA_V5_TO_V6_MIGRATION_ID,
+  SCHEMA_V6_TO_V7_MIGRATION_ID,
 ]
 
 /** 迁移链条的一句话说明 */
 export function describeMigrationChain(): string {
-  return `Legacy V${LEGACY_PORTFOLIO_VERSION} → ${schemaVersionLabel(3)} → ${schemaVersionLabel(4)} → ${schemaVersionLabel(5)} → ${schemaVersionLabel(PORTFOLIO_SCHEMA_VERSION)}`
+  return `Legacy V${LEGACY_PORTFOLIO_VERSION} → ${schemaVersionLabel(3)} → ${schemaVersionLabel(4)} → ${schemaVersionLabel(5)} → ${schemaVersionLabel(6)} → ${schemaVersionLabel(PORTFOLIO_SCHEMA_VERSION)}`
 }
 
 /* ------------------------------------------------------------------ *

@@ -34,16 +34,23 @@ import {
   SCHEMA_VERSION_WITH_ASSET_CLASS_AT_CAPTURE,
   SCHEMA_VERSION_WITH_CAPTURE_KIND,
   SCHEMA_VERSION_WITH_TRANSACTION_STATUS,
+  SCHEMA_VERSION_WITH_NULLABLE_VALUATION,
 } from '../schema'
 import { SCHEMA_V3_TO_V4_MIGRATION_ID, migrateV3ToV4 } from './schema-v3-to-v4'
 import { SCHEMA_V4_TO_V5_MIGRATION_ID, migrateV4ToV5 } from './schema-v4-to-v5'
 import { SCHEMA_V5_TO_V6_MIGRATION_ID, migrateV5ToV6 } from './schema-v5-to-v6'
+import { SCHEMA_V6_TO_V7_MIGRATION_ID, migrateV6ToV7 } from './schema-v6-to-v7'
 import { summarizeVerify, verifyMigration, type VerifyReport } from './verify'
 
 import type { MigrationStore } from '../repository'
 
 export type { MigrationStore }
-export { SCHEMA_V3_TO_V4_MIGRATION_ID, SCHEMA_V4_TO_V5_MIGRATION_ID, SCHEMA_V5_TO_V6_MIGRATION_ID }
+export {
+  SCHEMA_V3_TO_V4_MIGRATION_ID,
+  SCHEMA_V4_TO_V5_MIGRATION_ID,
+  SCHEMA_V5_TO_V6_MIGRATION_ID,
+  SCHEMA_V6_TO_V7_MIGRATION_ID,
+}
 
 export type MigrateOutcome =
   | { status: 'skipped'; reason: 'no-data' | 'already-migrated'; record?: MigrationRecord }
@@ -220,6 +227,20 @@ export async function migrate(options: MigrateOptions): Promise<MigrateOutcome> 
     await store.writePortfolio(current)
     await appendLog(store, upgraded.record)
     applied.push(SCHEMA_V5_TO_V6_MIGRATION_ID)
+  }
+
+  /*
+   * V6 → V7：持仓明细的不可估值字段改为可缺失。
+   * **零填充**：不触碰任何历史快照（只推进版本并记录事实）。
+   */
+  const alreadyAppliedV7 = applied.includes(SCHEMA_V6_TO_V7_MIGRATION_ID)
+  const sourceBelowV7 = (sourceVersion ?? 0) < SCHEMA_VERSION_WITH_NULLABLE_VALUATION
+  if (!alreadyAppliedV7 && sourceBelowV7) {
+    const upgraded = migrateV6ToV7({ portfolio: current, now: iso })
+    current = upgraded.portfolio
+    await store.writePortfolio(current)
+    await appendLog(store, upgraded.record)
+    applied.push(SCHEMA_V6_TO_V7_MIGRATION_ID)
   }
 
   await store.writeMeta({

@@ -495,8 +495,15 @@ describe('Snapshot 组装', () => {
     expect(snapshot.netWorth).toBe(0)
     expect(snapshot.unavailableCount).toBe(1)
     expect(snapshot.isComplete).toBe(false)
-    // 明细里 rateToCny 不写 1 冒充
-    expect(snapshot.positions[0].rateToCny).toBe(0)
+    /*
+     * 明细里**既不写 1 冒充，也不写 0**（Schema V7 起字段可缺失）。
+     *
+     * V7 之前这里写 0：虽然不算错，但 `rateToCny: 0` 与「汇率真的是 0」
+     * 无法区分，仍需读者先看 `reliable` 才能判断。
+     * 现在缺失就是 `undefined` —— 语义无歧义。
+     */
+    expect(snapshot.positions[0].rateToCny).toBeUndefined()
+    expect(snapshot.positions[0].valueCny).toBeUndefined()
     expect(snapshot.positions[0].reliable).toBe(false)
   })
 

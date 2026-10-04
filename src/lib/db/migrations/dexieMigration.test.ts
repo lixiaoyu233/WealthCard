@@ -3,6 +3,7 @@ import { DB_NAME, getDb, resetDbSingleton } from '../dexie'
 import { createDexieRepository } from '../dexieRepository'
 import { createDexieMigrationStore } from '../dexieMigrationStore'
 import { migrate } from './index'
+import { MIGRATION_CHAIN, PORTFOLIO_SCHEMA_VERSION } from '../schema'
 import type { PortfolioRepository } from '../repository'
 import { createLegacyFixture } from '../__fixtures__/legacyFixture'
 
@@ -52,27 +53,23 @@ describe('迁移写入 IndexedDB', () => {
     await migrate({ legacy: createLegacyFixture(), store })
     const meta = await store.readMeta()
     // 迁移链：Legacy V2 → Schema V3 → Schema V4
-    expect(meta?.appliedMigrations).toEqual([
-      'legacy-v2-to-schema-v6',
-      'schema-v3-to-v4-asset-class-at-capture',
-      'schema-v4-to-v5-capture-kind',
-      'schema-v5-to-v6-transaction-status',
-    ])
-    expect(meta?.schemaVersion).toBe(6)
+    // 由迁移链常量推导，避免每次升版都改测试字面量
+    expect(meta?.appliedMigrations).toEqual([...MIGRATION_CHAIN])
+    expect(meta?.schemaVersion).toBe(PORTFOLIO_SCHEMA_VERSION)
   })
 
   it('迁移日志写入 IndexedDB，含版本与计数', async () => {
     await migrate({ legacy: createLegacyFixture(), store })
     const log = await store.readLog()
     // 迁移链有两个步骤：v2→v4（内部经 v3）+ v3→v4（快照分类快照）
-    expect(log).toHaveLength(4)
+    expect(log).toHaveLength(MIGRATION_CHAIN.length)
     expect(log[0]).toMatchObject({
-      migrationId: 'legacy-v2-to-schema-v6',
+      migrationId: `legacy-v2-to-schema-v${PORTFOLIO_SCHEMA_VERSION}`,
       sourceSchemaVersion: 2,
-      targetSchemaVersion: 6,
+      targetSchemaVersion: PORTFOLIO_SCHEMA_VERSION,
       sourceFamily: 'legacy',
       sourceLabel: 'Legacy V2',
-      targetLabel: 'Portfolio Schema V6',
+      targetLabel: `Portfolio Schema V${PORTFOLIO_SCHEMA_VERSION}`,
       status: 'success',
     })
     expect(log[0].counts?.legacyItems).toBe(15)
@@ -86,6 +83,9 @@ describe('迁移写入 IndexedDB', () => {
     // 第四条是 v5→v6：交易状态零填充，不回填 POSTED
     expect(log[3].migrationId).toBe('schema-v5-to-v6-transaction-status')
     expect(log[3].note).toContain('不回填')
+    // 第五条是 v6→v7：不可估值字段可缺失，历史快照不回填
+    expect(log[4].migrationId).toBe('schema-v6-to-v7-nullable-valuation')
+    expect(log[4].note).toContain('不回填')
   })
 
   it('幂等：重复迁移不重复写入，且不新增实体', async () => {
@@ -98,7 +98,7 @@ describe('迁移写入 IndexedDB', () => {
     const after = await repo.counts()
     expect(after).toEqual(before)
     // 迁移链两个步骤各一条，重复执行不再增长
-    expect(await store.readLog()).toHaveLength(4)
+    expect(await store.readLog()).toHaveLength(MIGRATION_CHAIN.length)
   })
 
   it('再次启动（已有数据、旧数据仍在）时判定已迁移', async () => {

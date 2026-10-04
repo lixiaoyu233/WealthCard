@@ -3,6 +3,9 @@ import { Database, Info, Lock, RefreshCw, ShieldCheck } from 'lucide-react'
 import type { Portfolio2 } from '../types/portfolio2'
 import type { AnalysisView } from '../lib/analysis'
 import type { PortfolioRepository } from '../lib/db/repository'
+import { quoteCoverageOf } from '../lib/valuation/basis'
+import QuoteSheet from '../components/QuoteSheet'
+import FxSheet from '../components/FxSheet'
 import { PORTFOLIO_SCHEMA_VERSION, describeMigrationChain } from '../lib/db/schema'
 import { DB_VERSION } from '../lib/db/dexie'
 import AttributeKindSheet from '../components/AttributeKindSheet'
@@ -31,7 +34,11 @@ export interface SettingsTabProps {
 }
 
 export default function SettingsTab({ portfolio, analysis, repo, onChanged }: SettingsTabProps) {
+  /** 行情 / 汇率覆盖率（纯读取，不改金额） */
+  const coverage = useMemo(() => quoteCoverageOf(portfolio), [portfolio])
   const [dupOpen, setDupOpen] = useState(false)
+  const [quoteOpen, setQuoteOpen] = useState(false)
+  const [fxOpen, setFxOpen] = useState(false)
   const [attrOpen, setAttrOpen] = useState(false)
 
   const duplicates = useMemo(() => detectDuplicateHoldings(portfolio), [portfolio])
@@ -99,6 +106,78 @@ export default function SettingsTab({ portfolio, analysis, repo, onChanged }: Se
       </section>
 
       {/* 完整度 */}
+      {/* W6：行情与汇率覆盖率 —— 让「为什么某项无法估值」一眼可见 */}
+      <section className="mt-3 rounded-2xl border border-line bg-s1 p-4" data-testid="market-data-info">
+        <h2 className="text-[13px] font-medium text-ink">行情与汇率</h2>
+        <p className="mt-1 text-[11px] text-ink4">
+          W6 阶段为手动录入，不联网获取行情。
+        </p>
+        <dl className="mt-2 space-y-1 text-[12px]">
+          <div className="flex justify-between">
+            <dt className="text-ink3">已有行情</dt>
+            <dd className="text-ink" data-testid="market-quote-count">
+              {coverage.withQuote} 项
+            </dd>
+          </div>
+          <div className="flex justify-between">
+            <dt className="text-ink3">缺行情（无法估值）</dt>
+            <dd className={coverage.missingQuote > 0 ? 'tone-warn' : 'text-ink'} data-testid="market-missing-quote">
+              {coverage.missingQuote} 项
+            </dd>
+          </div>
+          <div className="flex justify-between">
+            <dt className="text-ink3">缺汇率币种</dt>
+            <dd
+              className={coverage.missingFxCurrencies.length > 0 ? 'tone-warn' : 'text-ink'}
+              data-testid="market-missing-fx"
+            >
+              {coverage.missingFxCurrencies.length > 0
+                ? coverage.missingFxCurrencies.join('、')
+                : '无'}
+            </dd>
+          </div>
+          <div className="flex justify-between">
+            <dt className="text-ink3">存在过期行情</dt>
+            <dd className={coverage.hasStale ? 'tone-warn' : 'text-ink'} data-testid="market-stale">
+              {coverage.hasStale ? '是（不计入可靠总额）' : '否'}
+            </dd>
+          </div>
+        </dl>
+
+        <div className="mt-3 space-y-2">
+          <button
+            type="button"
+            onClick={() => setQuoteOpen(true)}
+            className="flex w-full items-center justify-between rounded-2xl border border-line bg-s2 px-4 py-3 text-left text-[13px] text-ink2"
+            data-testid="open-quote"
+          >
+            <span>录入 / 更新行情</span>
+            <span className="text-[11px] text-ink4">
+              {coverage.missingQuote > 0 ? `${coverage.missingQuote} 项待补` : '按需更新'}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setFxOpen(true)}
+            className="flex w-full items-center justify-between rounded-2xl border border-line bg-s2 px-4 py-3 text-left text-[13px] text-ink2"
+            data-testid="open-fx"
+          >
+            <span>录入 / 更新汇率</span>
+            <span className="text-[11px] text-ink4">
+              {coverage.missingFxCurrencies.length > 0
+                ? `缺 ${coverage.missingFxCurrencies.length} 个币种`
+                : '按需更新'}
+            </span>
+          </button>
+        </div>
+
+        <p className="mt-2 text-[11px] leading-relaxed text-ink4">
+          缺行情或缺失汇率时，该项**保持「无法估值」**，不会按成本、0 或 1:1 折算；
+          过期行情也不会进入可靠总资产。
+        </p>
+      </section>
+
       <section className="mt-3 rounded-2xl border border-line bg-s1 p-4" data-testid="coverage-info">
         <h2 className="flex items-center gap-1.5 text-[13px] font-medium text-ink2">
           <ShieldCheck size={13} /> 数据完整度
@@ -198,6 +277,26 @@ export default function SettingsTab({ portfolio, analysis, repo, onChanged }: Se
       </p>
 
       {dupOpen ? <DuplicateSheet duplicates={duplicates} onClose={() => setDupOpen(false)} /> : null}
+
+      {quoteOpen ? (
+        <QuoteSheet
+          open
+          onClose={() => setQuoteOpen(false)}
+          portfolio={portfolio}
+          repo={repo}
+          onChanged={onChanged}
+        />
+      ) : null}
+
+      {fxOpen ? (
+        <FxSheet
+          open
+          onClose={() => setFxOpen(false)}
+          portfolio={portfolio}
+          repo={repo}
+          onChanged={onChanged}
+        />
+      ) : null}
       {attrOpen ? (
         <AttributeKindSheet
           portfolio={portfolio}

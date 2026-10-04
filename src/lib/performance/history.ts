@@ -100,7 +100,15 @@ export type CompositionResult =
  * 「用当前分类补上」—— 那会让历史趋势随分类确认而整体重画。
  */
 export function compositionAtCapture(snapshot: Snapshot): CompositionResult {
-  const totalCny = round2(snapshot.positions.filter((p) => p.reliable).reduce((s, p) => s + p.valueCny, 0))
+  /*
+   * 只累加**可靠且确有金额**的项。
+   * V7 起 `valueCny` 可缺失（不可估值），必须显式处理而不是把 undefined 当 0。
+   */
+  const totalCny = round2(
+    snapshot.positions
+      .filter((p) => p.reliable && p.valueCny !== undefined)
+      .reduce((s, p) => s + (p.valueCny ?? 0), 0),
+  )
   const isComplete = snapshot.isComplete ?? true
 
   if (snapshot.positions.length === 0) {
@@ -126,7 +134,8 @@ export function compositionAtCapture(snapshot: Snapshot): CompositionResult {
 
   const byClass: Record<string, number> = {}
   for (const p of snapshot.positions) {
-    if (!p.reliable) continue
+    // 不可靠 / 缺金额的项不参与分类汇总（缺金额不得当 0）
+    if (!p.reliable || p.valueCny === undefined) continue
     const cls = p.assetClassAtCapture as string
     byClass[cls] = round2((byClass[cls] ?? 0) + p.valueCny)
   }
@@ -252,7 +261,7 @@ export function positionsByClass(
     .filter((p) => p.reliable && p.assetClassAtCapture !== undefined)
     .map((p) => ({
       assetClass: p.assetClassAtCapture as string,
-      valueCny: p.valueCny,
+      valueCny: p.valueCny as number,
       instrumentId: p.instrumentId,
       accountId: p.accountId,
     }))

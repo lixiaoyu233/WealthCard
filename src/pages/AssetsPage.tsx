@@ -1,13 +1,20 @@
 import { useMemo, useState } from 'react'
-import { AlertTriangle, BadgeCheck, Coins } from 'lucide-react'
+import { AlertTriangle, BadgeCheck, Coins, LineChart } from 'lucide-react'
 import type { Portfolio2 } from '../types/portfolio2'
 import type { AnalysisView } from '../lib/analysis'
 import type { ValuationResult } from '../lib/valuation/types'
 import type { PortfolioRepository } from '../lib/db/repository'
 import { detectDuplicateHoldings } from '../lib/ledger/duplicates'
+import {
+  quoteOf,
+  reasonLabelsOf,
+  valuationBasisOf,
+  VALUATION_STATUS_LABEL,
+} from '../lib/valuation/basis'
 import ClassifySheet from '../components/ClassifySheet'
 import CashConvertSheet from '../components/CashConvertSheet'
 import DuplicateSheet from '../components/DuplicateSheet'
+import QuoteSheet from '../components/QuoteSheet'
 import {
   ACCOUNT_TYPE_LABEL,
   ASSET_CLASS_LABEL,
@@ -97,9 +104,38 @@ export default function AssetsPage({
   const [classifyFor, setClassifyFor] = useState<string[] | undefined>(undefined)
   const [cashOpen, setCashOpen] = useState(false)
   const [dupOpen, setDupOpen] = useState(false)
+  const [quoteOpen, setQuoteOpen] = useState(false)
+  const [quoteFor, setQuoteFor] = useState<string | undefined>(undefined)
 
   const duplicates = useMemo(() => detectDuplicateHoldings(portfolio), [portfolio])
   const unconfirmedCount = analysis.coverage.unconfirmedCount
+
+  /** 该持仓是否需要补录行情（数量口径、非现金、且当前无行情） */
+  const needsQuote = (row: { valuationMode?: string; instrumentId: string; instrumentType?: string }) => {
+    if (row.instrumentType === 'cash') return false
+    const h = portfolio.holdings.find((x) => x.instrumentId === row.instrumentId)
+    if (!h || h.valuationMode !== 'quantity') return false
+    return !quoteOf(portfolio, row.instrumentId)
+  }
+
+  /** 估值依据（价格类型 / 状态 / 来源 / 时间 / 汇率状态） */
+  const basisOf = (
+    pf: Portfolio2,
+    result: ValuationResult,
+    instrumentId: string,
+  ) => valuationBasisOf(result, pf, instrumentId)
+
+  /** 需要行情但当前没有行情的标的数（现金不需要行情） */
+  const needsQuoteCount = useMemo(() => {
+    let n = 0
+    for (const h of portfolio.holdings) {
+      if (h.valuationMode !== 'quantity') continue
+      const inst = portfolio.instruments.find((i) => i.id === h.instrumentId)
+      if (!inst || inst.instrumentType === 'cash') continue
+      if (!quoteOf(portfolio, h.instrumentId)) n += 1
+    }
+    return n
+  }, [portfolio])
 
   /** 可转换的现金：已确认现金 + 手动口径 */
   const cashCandidates = useMemo(() => {
@@ -193,6 +229,25 @@ export default function AssetsPage({
             </span>
           </button>
         ) : null}
+
+        {/* W6：行情录入入口（补齐「行情只减不增」的能力断点） */}
+        <button
+          type="button"
+          onClick={() => {
+            setQuoteFor(undefined)
+            setQuoteOpen(true)
+          }}
+          className="flex w-full items-center gap-2 rounded-2xl border border-line bg-s1 px-3.5 py-2.5 text-left text-[12px] text-ink2"
+          data-testid="action-quote"
+        >
+          <LineChart size={14} className="shrink-0 text-ink3" />
+          <span className="flex-1">
+            录入 / 更新行情
+            <span className="ml-1.5 text-ink4">
+              {needsQuoteCount > 0 ? `${needsQuoteCount} 项待补行情` : '全部已有行情'}
+            </span>
+          </span>
+        </button>
       </section>
 
       {/* 维度切换 */}
@@ -297,9 +352,17 @@ export default function AssetsPage({
                         <p className="text-[13px] text-ink">{cny(row.valueCny)}</p>
                       ) : row.status === 'stale' ? (
                         <>
-                          <p className="text-[12px] text-ink3">
-                            最后已知 {cny(result?.nativeValue ?? 0)}
-                          </p>
+                          {/*
+                            绝不用 `?? 0` 伪造金额：没有最后已知值时就如实说明，
+                            而不是显示 ¥0.00（那与「真的不值钱」无法区分）。
+                          */}
+                          {result?.nativeValue !== undefined ? (
+                            <p className="text-[12px] text-ink3">
+                              最后已知 {cny(result.nativeValue)}
+                            </p>
+                          ) : (
+                            <p className="text-[12px] text-ink4">依据已过期</p>
+                          )}
                           <p className="text-[10px] tone-warn">未计入可靠总额</p>
                         </>
                       ) : (
@@ -324,8 +387,42 @@ export default function AssetsPage({
                     </div>
                   </div>
 
+                  {/*
+                    估值依据（W6）：让每个金额都能回答「价格从哪来、几点的、可不可靠」。
+                    展示价格类型 / 行情状态 / 来源 / 依据时间 / 汇率状态。
+                  */}
+                  {result ? (
+                    <p className="mt-1.5 text-[10px] text-ink4" data-testid="holding-basis">
+                      {VALUATION_STATUS_LABEL[result.status]}
+                      {(() => {
+                        const basis = basisOf(portfolio, result, row.instrumentId)
+                        return basis.summary && basis.summary !== VALUATION_STATUS_LABEL[result.status]
+                          ? ` · ${basis.summary}`
+                          : ''
+                      })()}
+                    </p>
+                  ) : null}
+
+                  {/* 降级原因用中文标签，不再暴露 missing_fx 这类内部代码 */}
                   {row.status !== 'ok' && result?.reasons.length ? (
-                    <p className="mt-1.5 text-[10px] text-ink4">原因：{result.reasons.join('、')}</p>
+                    <p className="mt-1 text-[10px] text-ink4" data-testid="holding-reasons">
+                      原因：{reasonLabelsOf(result.reasons).join('、')}
+                    </p>
+                  ) : null}
+
+                  {/* 缺行情时给出直接入口（W6 的能力断点修复） */}
+                  {needsQuote(row) ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setQuoteFor(row.instrumentId)
+                        setQuoteOpen(true)
+                      }}
+                      className="mt-1.5 rounded border border-line px-1.5 py-0.5 text-[10px] text-ink3"
+                      data-testid="row-add-quote"
+                    >
+                      录入行情
+                    </button>
                   ) : null}
                 </li>
               )
@@ -370,6 +467,17 @@ export default function AssetsPage({
       ) : null}
 
       {dupOpen ? <DuplicateSheet duplicates={duplicates} onClose={() => setDupOpen(false)} /> : null}
+
+      {quoteOpen ? (
+        <QuoteSheet
+          open
+          onClose={() => setQuoteOpen(false)}
+          portfolio={portfolio}
+          repo={repo}
+          onChanged={onChanged}
+          initialInstrumentId={quoteFor}
+        />
+      ) : null}
     </div>
   )
 }

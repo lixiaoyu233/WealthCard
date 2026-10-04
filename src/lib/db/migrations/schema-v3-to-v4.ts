@@ -140,7 +140,8 @@ export function assetClassCompositionAtCapture(
   }
   const byClass: Partial<Record<string, number>> = {}
   for (const p of snapshot.positions) {
-    if (!p.reliable) continue
+    // 不可靠 / 缺金额的项不参与分类汇总（缺金额不得当 0）
+    if (!p.reliable || p.valueCny === undefined) continue
     const cls = p.assetClassAtCapture as string
     byClass[cls] = (byClass[cls] ?? 0) + p.valueCny
   }

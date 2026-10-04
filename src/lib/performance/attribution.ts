@@ -132,12 +132,24 @@ export function computeFxEffect(
     return { effect: undefined, note: '上一份快照没有持仓明细，无法计算汇率影响' }
   }
 
+  /*
+   * 只采纳**可靠且确有汇率**的项（Schema V7 起 `rateToCny` 可缺失）。
+   * 缺汇率的项不参与映射，也不覆盖已有值 ——
+   * 用 undefined 或伪造值污染整条归因都会让结论不可信。
+   */
   const endingRates = new Map<string, number>()
-  for (const p of ending.positions) endingRates.set(`${p.accountId}::${p.instrumentId}`, p.rateToCny)
+  for (const p of ending.positions) {
+    if (!p.reliable || p.rateToCny === undefined) continue
+    endingRates.set(`${p.accountId}::${p.instrumentId}`, p.rateToCny)
+  }
   // 也接受按币种查询的退化路径（当明细缺失时）
   const endingRateByCurrency = new Map<string, number>()
-  for (const p of ending.positions) endingRateByCurrency.set(p.currency, p.rateToCny)
+  for (const p of ending.positions) {
+    if (!p.reliable || p.rateToCny === undefined) continue
+    endingRateByCurrency.set(p.currency, p.rateToCny)
+  }
   for (const p of opening.positions) {
+    if (p.rateToCny === undefined) continue
     if (!endingRateByCurrency.has(p.currency)) endingRateByCurrency.set(p.currency, p.rateToCny)
   }
 
@@ -148,6 +160,15 @@ export function computeFxEffect(
     const rateNow =
       endingRates.get(`${p.accountId}::${p.instrumentId}`) ?? endingRateByCurrency.get(p.currency)
     if (rateNow === undefined) {
+      missing += 1
+      continue
+    }
+    /*
+     * 缺单价（不可估值）的期初持仓无法参与汇率归因 —— 计入 missing，
+     * 而不是把 undefined 当 0（那会把「无法计算」伪装成「影响为零」）。
+     */
+    // 缺单价或缺汇率 → 该项无法参与汇率归因，计入 missing（不当作 0）
+    if (p.price === undefined || p.rateToCny === undefined) {
       missing += 1
       continue
     }
@@ -386,6 +407,8 @@ export function checkIdentity(snapshot: Snapshot, tolerance = 0.01): IdentityChe
 export function nativeExposureByCurrency(positions: SnapshotPosition[]): Record<string, number> {
   const out: Record<string, number> = {}
   for (const p of positions) {
+    // 缺单价（不可估值）的持仓不计入原币敞口：宁可少算，也不用 0 冒充
+    if (p.price === undefined) continue
     out[p.currency] = (out[p.currency] ?? 0) + p.quantity * p.price
   }
   return out

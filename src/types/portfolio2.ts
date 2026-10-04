@@ -470,13 +470,33 @@ export interface SnapshotPosition {
   accountId: string
   /** 数量（现金口径下即金额） */
   quantity: number
-  /** 单价（原币）；现金恒为 1 */
-  price: number
+  /**
+   * 单价（原币）；现金恒为 1。
+   *
+   * ⚠️ **不可估值时必须是 `undefined`，绝不写 0 或 1**
+   * （Schema V7 起为可选字段）。
+   * 用数字伪造缺失会违反核心不变量「不可估值 ≠ 价值为 0」：
+   * 一个 `price: 0` 的持仓脱离 `reliable` 标记后，与「真的不值钱」无法区分。
+   */
+  price?: number
   currency: CurrencyCode
-  /** 该币种对 CNY 的汇率（1 原币 = ? CNY）；CNY 恒为 1 */
-  rateToCny: number
-  /** 折算后的人民币价值 */
-  valueCny: number
+  /**
+   * 该币种对 CNY 的汇率（1 原币 = ? CNY）；CNY 恒为 1。
+   *
+   * 为什么**保持必填**：Phase 4 的汇率归因恒等式
+   * （`computeFxEffect` / `netWorth = opening + flow + return + fx + other`）
+   * 在结构上按数字参与运算，改为可空会改变已验收的归因语义。
+   * 因此汇率未解析时用 **1（中性占位，不改变任何乘积）**，
+   * 该条的可信度由 `reliable = false` 负责表达。
+   */
+  rateToCny?: number
+  /**
+   * 折算后的人民币价值。
+   *
+   * ⚠️ **不可估值时必须是 `undefined`，绝不写 0**（Schema V7 起为可选字段）。
+   * 下游必须显式处理缺失，而不是把 0 当成「价值为零」。
+   */
+  valueCny?: number
   /** 该条是否可靠估值（false 时不参与总额） */
   reliable: boolean
   /**
