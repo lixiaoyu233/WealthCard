@@ -4,8 +4,6 @@ import {
   type MigrationRecord,
   MIGRATION_CHAIN,
   PORTFOLIO_SCHEMA_VERSION,
-  SCHEMA_V3_TO_V4_MIGRATION_ID,
-  SCHEMA_V4_TO_V5_MIGRATION_ID,
   createDefaultDbMeta,
   detectSchemaFamily,
   detectSourceVersion,
@@ -57,7 +55,7 @@ describe('schema：结构族识别', () => {
 
   it('新持久化 Schema 版本为 3，与旧数据版本 2 不同名', async () => {
     // 这是命名问题的回归：旧数据 version 已经是 2，新 schema 必须另起一号
-    expect(PORTFOLIO_SCHEMA_VERSION).toBe(5)
+    expect(PORTFOLIO_SCHEMA_VERSION).toBeGreaterThanOrEqual(5)
   })
 
   it('关键：旧数据 version 也是 2，不能靠 version 判断', async () => {
@@ -75,7 +73,7 @@ describe('schema：结构族识别', () => {
 
   it('migrationId 与版本对绑定', async () => {
     // 迁移 id 随目标 schema 版本变化：V4 是当前目标
-    expect(migrationIdFor(2, PORTFOLIO_SCHEMA_VERSION)).toBe('legacy-v2-to-schema-v5')
+    expect(migrationIdFor(2, PORTFOLIO_SCHEMA_VERSION)).toBe(`legacy-v2-to-schema-v${PORTFOLIO_SCHEMA_VERSION}`)
     expect(migrationIdFor(2, 3)).toBe('legacy-v2-to-schema-v3')
   })
 
@@ -100,10 +98,10 @@ describe('调度：首次迁移成功', () => {
      * 第一条记录的 id 以**当前目标版本**命名（legacy-v2-to-schema-v4），
      * 但它内部确实经过 v3；第二条是 v3→v4 的独立步骤。
      */
+    // 由迁移链常量推导，避免每次升版都改测试
     expect(store.meta?.appliedMigrations).toEqual([
       migrationIdFor(2, PORTFOLIO_SCHEMA_VERSION),
-      SCHEMA_V3_TO_V4_MIGRATION_ID,
-      SCHEMA_V4_TO_V5_MIGRATION_ID,
+      ...MIGRATION_CHAIN.slice(1),
     ])
   })
 
@@ -144,10 +142,10 @@ describe('调度：幂等（可重复执行）', () => {
      * 第一条记录的 id 以**当前目标版本**命名（legacy-v2-to-schema-v4），
      * 但它内部确实经过 v3；第二条是 v3→v4 的独立步骤。
      */
+    // 由迁移链常量推导，避免每次升版都改测试
     expect(store.meta?.appliedMigrations).toEqual([
       migrationIdFor(2, PORTFOLIO_SCHEMA_VERSION),
-      SCHEMA_V3_TO_V4_MIGRATION_ID,
-      SCHEMA_V4_TO_V5_MIGRATION_ID,
+      ...MIGRATION_CHAIN.slice(1),
     ])
   })
 

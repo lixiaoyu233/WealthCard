@@ -2,7 +2,13 @@ import { useMemo, useState } from 'react'
 import type { Portfolio2, Transaction, TransactionType } from '../types/portfolio2'
 import type { TrendSeries } from '../lib/performance/history'
 import { ASSET_CLASS_LABEL } from '../lib/analysis/dimensions'
-import { queryTransactions, type TransactionQuery } from '../lib/ledger/transactionService'
+import {
+  queryTransactions,
+  transactionCounts,
+  type TransactionQuery,
+} from '../lib/ledger/transactionService'
+import { isVoided } from '../lib/ledger/lifecycle'
+import type { PortfolioRepository } from '../lib/db/repository'
 import { deriveLedger } from '../lib/ledger/derive'
 import FlowsView from '../components/FlowsView'
 import TransactionDetailSheet from '../components/TransactionDetailSheet'
@@ -28,16 +34,21 @@ import TransactionDetailSheet from '../components/TransactionDetailSheet'
 export interface HistoryTabProps {
   trend: TrendSeries
   portfolio: Portfolio2
+  /** 作废交易需要经 Repository 写入 */
+  repo: PortfolioRepository
+  /** 写入后重新派生 */
+  onChanged: () => void
 }
 
 const cny = (n: number) =>
   `¥${n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
-export default function HistoryTab({ trend, portfolio }: HistoryTabProps) {
+export default function HistoryTab({ trend, portfolio, repo, onChanged }: HistoryTabProps) {
   const [view, setView] = useState<'flows' | 'snapshots'>('flows')
   const [showAll, setShowAll] = useState(false)
   const [accountFilter, setAccountFilter] = useState('')
   const [typeFilter, setTypeFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active'>('all')
   const [selected, setSelected] = useState<Transaction | null>(null)
 
   const accountById = useMemo(
@@ -54,8 +65,12 @@ export default function HistoryTab({ trend, portfolio }: HistoryTabProps) {
     const query: TransactionQuery = {}
     if (accountFilter) query.accountId = accountFilter
     if (typeFilter) query.type = typeFilter as TransactionType
-    return queryTransactions(portfolio.transactions, query)
-  }, [portfolio.transactions, accountFilter, typeFilter])
+    const list = queryTransactions(portfolio.transactions, query)
+    // 状态筛选：默认「含已作废」（作废是审计事实，用户需要看到全貌）
+    return statusFilter === 'active' ? list.filter((t) => !isVoided(t)) : list
+  }, [portfolio.transactions, accountFilter, typeFilter, statusFilter])
+
+  const counts = useMemo(() => transactionCounts(portfolio.transactions), [portfolio.transactions])
 
   /** 每笔交易的 Ledger Effects（真实派生关系，供详情展示） */
   const entriesByTx = useMemo(() => {
@@ -77,8 +92,9 @@ export default function HistoryTab({ trend, portfolio }: HistoryTabProps) {
     <div className="mx-auto w-full max-w-[480px] px-4">
       <header className="pt-4">
         <h1 className="text-[15px] font-medium text-ink">资产历史</h1>
-        <p className="mt-1 text-[11px] text-ink4">
-          {portfolio.transactions.length} 笔交易 · {trend.points.length} 个快照
+        <p className="mt-1 text-[11px] text-ink4" data-testid="tx-counts">
+          {counts.posted} 笔有效
+          {counts.voided > 0 ? ` · ${counts.voided} 笔已作废` : ''} · {trend.points.length} 个快照
         </p>
       </header>
 
@@ -114,8 +130,10 @@ export default function HistoryTab({ trend, portfolio }: HistoryTabProps) {
           instrumentById={instrumentById}
           accountFilter={accountFilter}
           typeFilter={typeFilter}
+          statusFilter={statusFilter}
           onAccountFilter={setAccountFilter}
           onTypeFilter={setTypeFilter}
+          onStatusFilter={setStatusFilter}
           onSelect={setSelected}
         />
       ) : (
@@ -250,9 +268,15 @@ export default function HistoryTab({ trend, portfolio }: HistoryTabProps) {
         <TransactionDetailSheet
           transaction={selected}
           portfolio={portfolio}
+          repo={repo}
           accountById={accountById}
           instrumentById={instrumentById}
           effects={entriesByTx.get(selected.id) ?? []}
+          onVoided={() => {
+            // 作废后关闭详情并触发重新派生（详情内部已用本地 state 反映新状态）
+            setSelected(null)
+            onChanged()
+          }}
           onClose={() => setSelected(null)}
         />
       ) : null}

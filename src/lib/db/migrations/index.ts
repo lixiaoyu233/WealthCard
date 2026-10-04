@@ -30,15 +30,20 @@ import {
   type LegacyNetWorthPointLike,
   type LegacyPortfolioLike,
 } from './legacy-v2-to-schema-v3'
-import { SCHEMA_VERSION_WITH_ASSET_CLASS_AT_CAPTURE, SCHEMA_VERSION_WITH_CAPTURE_KIND } from '../schema'
+import {
+  SCHEMA_VERSION_WITH_ASSET_CLASS_AT_CAPTURE,
+  SCHEMA_VERSION_WITH_CAPTURE_KIND,
+  SCHEMA_VERSION_WITH_TRANSACTION_STATUS,
+} from '../schema'
 import { SCHEMA_V3_TO_V4_MIGRATION_ID, migrateV3ToV4 } from './schema-v3-to-v4'
 import { SCHEMA_V4_TO_V5_MIGRATION_ID, migrateV4ToV5 } from './schema-v4-to-v5'
+import { SCHEMA_V5_TO_V6_MIGRATION_ID, migrateV5ToV6 } from './schema-v5-to-v6'
 import { summarizeVerify, verifyMigration, type VerifyReport } from './verify'
 
 import type { MigrationStore } from '../repository'
 
 export type { MigrationStore }
-export { SCHEMA_V3_TO_V4_MIGRATION_ID, SCHEMA_V4_TO_V5_MIGRATION_ID }
+export { SCHEMA_V3_TO_V4_MIGRATION_ID, SCHEMA_V4_TO_V5_MIGRATION_ID, SCHEMA_V5_TO_V6_MIGRATION_ID }
 
 export type MigrateOutcome =
   | { status: 'skipped'; reason: 'no-data' | 'already-migrated'; record?: MigrationRecord }
@@ -201,6 +206,20 @@ export async function migrate(options: MigrateOptions): Promise<MigrateOutcome> 
     await store.writePortfolio(current)
     await appendLog(store, upgraded.record)
     applied.push(SCHEMA_V4_TO_V5_MIGRATION_ID)
+  }
+
+  /*
+   * V5 → V6：交易生命周期字段（作废机制）。
+   * 同样是**零填充**：不给老交易写 POSTED，读取层把 undefined 解释为 POSTED。
+   */
+  const alreadyAppliedV6 = applied.includes(SCHEMA_V5_TO_V6_MIGRATION_ID)
+  const sourceBelowV6 = (sourceVersion ?? 0) < SCHEMA_VERSION_WITH_TRANSACTION_STATUS
+  if (!alreadyAppliedV6 && sourceBelowV6) {
+    const upgraded = migrateV5ToV6({ portfolio: current, now: iso })
+    current = upgraded.portfolio
+    await store.writePortfolio(current)
+    await appendLog(store, upgraded.record)
+    applied.push(SCHEMA_V5_TO_V6_MIGRATION_ID)
   }
 
   await store.writeMeta({

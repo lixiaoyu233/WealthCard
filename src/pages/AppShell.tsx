@@ -140,7 +140,12 @@ export default function AppShell({
         ) : tab === 'analysis' ? (
           <AnalysisTab analysis={data.analysis} duplicates={data.duplicates} />
         ) : tab === 'history' ? (
-          <HistoryTab trend={data.trend} portfolio={data.portfolio} />
+          <HistoryTab
+            trend={data.trend}
+            portfolio={data.portfolio}
+            repo={activeRepo}
+            onChanged={handleChanged}
+          />
         ) : (
           <SettingsTab
             portfolio={data.portfolio}

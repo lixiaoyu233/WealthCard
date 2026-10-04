@@ -19,6 +19,7 @@ import { type FxTable, resolveRate } from '../valuation/fx'
 import { valuateHolding } from '../valuation/engine'
 import { type QuotePolicy } from '../valuation/policy'
 import { classifyPortfolioFlows } from './cashflow'
+import { activeTransactions } from '../ledger/lifecycle'
 import { type Attribution, attribute, computeExchangeFxEffect } from './attribution'
 
 const round2 = (n: number) => Math.round(n * 100) / 100
@@ -142,7 +143,18 @@ export function buildSnapshot(
   const netWorth = round2(totalAssets - totalLiabilities)
 
   /* ---- 2) 当日交易 → 外部现金流 ---- */
-  const transactions = portfolio.transactions.filter((t) => t.timestamp.slice(0, 10) === date)
+  /*
+   * 快照的当日交易（Phase 8 / W5）。
+   *
+   * ⚠️ 这里**不经过** `deriveLedger`，是一条独立路径 ——
+   * 因此必须**同样过滤已作废交易**，否则 Ledger 与 Snapshot 会不一致：
+   * 已作废交易仍会被算进当日的现金流归因。
+   *
+   * 注意：**已生成的历史快照不回溯修改**（快照是「当时的事实」）。
+   */
+  const transactions = activeTransactions(portfolio.transactions).filter(
+    (t) => t.timestamp.slice(0, 10) === date,
+  )
 
   const converter = (amount: number, currency: string): number | undefined => {
     if (currency === 'CNY') return amount

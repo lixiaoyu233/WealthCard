@@ -37,6 +37,7 @@
 
 import type { Transaction } from '../../types/portfolio2'
 import { TRANSACTION_SEMANTICS } from './types'
+import { activeTransactions } from './lifecycle'
 
 /* ------------------------------------------------------------------ *
  * 数值工具
@@ -202,7 +203,16 @@ export function deriveLedgerEffects(txs: Transaction[], context: EffectContext =
   const adjustedKeys = new Set<string>()
   const currencyOf = context.instrumentCurrency
 
-  for (const tx of sortTransactions(txs)) {
+  /*
+   * **统一入口过滤已作废交易**（Phase 8 / W5）。
+   *
+   * 只在这一处过滤，下游全部自动遵循：
+   * deriveLedger / rebuildHoldingsFromTransactions / reconcileHoldings /
+   * availablePositions / 交易详情的 Ledger Effects。
+   *
+   * 语义：作废 = 这笔交易仿佛没有发生过（保留记录用于审计）。
+   */
+  for (const tx of sortTransactions(activeTransactions(txs))) {
     const semantic = TRANSACTION_SEMANTICS[tx.type]
     const amount = num(tx.amount)
     const fee = num(tx.fee)

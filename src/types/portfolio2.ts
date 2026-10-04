@@ -347,7 +347,35 @@ export interface Transaction {
   /** 该笔交易对现金标的的**目标金额**（换汇时的到账金额，原币） */
   toAmount?: number
   note?: string
+
+  /* ---- 生命周期（Schema V6 / Phase 8 W5） ---- */
+
+  /**
+   * 交易状态。
+   *
+   * | 值 | 含义 |
+   * | --- | --- |
+   * | `POSTED` | 正常有效交易，参与 Ledger 计算 |
+   * | `VOIDED` | **已作废**，不再参与 Ledger 计算 |
+   * | `undefined` | **按 `POSTED` 处理**（V6 之前的老数据） |
+   *
+   * ⚠️ 作废是**唯一**的修正手段：**禁止物理删除 Transaction**。
+   * 原记录必须保留，只把状态改成 `VOIDED`。
+   */
+  status?: TransactionStatus
+  /** 作废时间 */
+  voidedAt?: IsoDateTime
+  /** 作废原因（可选，便于审计） */
+  voidReason?: string
 }
+
+/**
+ * 交易生命周期状态。
+ *
+ * 读取层统一用 `transactionStatus()` 归一化：`undefined → 'POSTED'`。
+ * **不要在各处直接判断 `tx.status === 'POSTED'`** —— 那会漏掉老数据。
+ */
+export type TransactionStatus = 'POSTED' | 'VOIDED'
 
 /* ------------------------------------------------------------------ *
  * Quote 行情

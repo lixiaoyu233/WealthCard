@@ -58,6 +58,7 @@ import { detectDuplicateHoldings } from '../ledger/duplicates'
 import { rebuildHoldingsFromTransactions } from '../ledger/rebuild'
 import { reconcileHoldings } from '../ledger/reconcile'
 import { TRANSACTION_SEMANTICS } from '../ledger/types'
+import { isVoided, transactionStatus } from './lifecycle'
 
 /* ------------------------------------------------------------------ *
  * 精度
@@ -124,6 +125,12 @@ export type RecordFailureCode =
   | 'duplicate-holding'
   | 'reconcile-failed'
   | 'invalid-input'
+  /** 交易不存在 */
+  | 'not-found'
+  /** 交易已经作废（防止重复作废） */
+  | 'already-voided'
+  /** 作废会导致负数持仓 / 负成本 */
+  | 'would-cause-negative'
 
 export interface RecordFailure {
   ok: false
@@ -458,6 +465,308 @@ export async function recordTransaction(
     },
     reconcile: { ok: rec.ok, matchedCount: rec.matchedCount, holdingCount: rec.holdingCount },
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * 作废（Phase 8 / W5）—— 交易唯一的修正手段
+ * ------------------------------------------------------------------ */
+
+export interface VoidOptions {
+  /** 作废原因（可选，便于审计） */
+  reason?: string
+  now?: () => Date
+}
+
+export interface VoidSuccess {
+  ok: true
+  /** 作废后的交易（status = VOIDED） */
+  transaction: Transaction
+  /** 写入后的组合（已含重建的持仓缓存） */
+  portfolio: Portfolio2
+  rebuilt: { rebuiltCount: number; createdCount: number; preservedCount: number }
+  reconcile: { ok: boolean; matchedCount: number; holdingCount: number }
+  /** 因失去全部交易依据而被清理的持仓键（便于排查与测试断言） */
+  droppedOrphans: string[]
+}
+
+export type VoidResult = VoidSuccess | RecordFailure
+
+/**
+ * **作废一笔交易**（Phase 8 / W5）。
+ *
+ * ## 为什么是「作废」而不是「删除」
+ *
+ * Transaction 是事实源。物理删除会让 `rebuild` 推出不同结果，
+ * 且丢失审计轨迹。因此只把状态改成 `VOIDED`，原记录完整保留。
+ *
+ * ## 流程（与 `recordTransaction` 同样严格）
+ *
+ * ```
+ * ① 交易存在性检查        → 不存在即拒绝，不写任何数据
+ * ② 防止重复作废          → 已 VOIDED 即拒绝
+ * ③ 内存试算：作废后跑 deriveLedger
+ * ④ Ledger 校验：无 issue、不产生负持仓 / 负成本
+ * ⑤ rebuildHoldingsFromTransactions（从 Ledger 重建缓存）
+ * ⑥ reconcileHoldings（账实校验）
+ * ⑦ **全部通过才整体写入**
+ * ```
+ *
+ * 任一步失败都返回 `{ ok: false }`，**绝不产生半状态**。
+ *
+ * ## 为什么需要试算
+ *
+ * 作废一笔 `buy` 可能让后续的 `sell` 变成超卖。
+ * 直接落库会把账本写成不可能的状态（`Holding.quantity` 不允许负数），
+ * 因此必须在写入前用试算结果判定并拒绝。
+ */
+export async function voidTransaction(
+  repo: PortfolioRepository,
+  transactionId: string,
+  options: VoidOptions = {},
+): Promise<VoidResult> {
+  const now = options.now ?? (() => new Date())
+
+  /* ---- 1) 读取当前事实 ---- */
+  const portfolio = await repo.loadPortfolio()
+
+  /* ---- 2) 存在性检查 ---- */
+  const target = portfolio.transactions.find((t) => t.id === transactionId)
+  if (!target) {
+    return { ok: false, code: 'not-found', message: '找不到该交易（数据未做任何修改）' }
+  }
+
+  /* ---- 3) 防止重复作废 ---- */
+  if (isVoided(target)) {
+    return {
+      ok: false,
+      code: 'already-voided',
+      message: `该交易已于 ${target.voidedAt ?? '此前'} 作废，不能重复作废`,
+    }
+  }
+
+  /* ---- 4) 构造作废后的组合（仅改状态，不动其它字段） ---- */
+  const voidedAt = now().toISOString()
+  const voidedTx: Transaction = {
+    ...target,
+    status: 'VOIDED',
+    voidedAt,
+    voidReason: options.reason?.trim() || undefined,
+  }
+  const withVoid: Portfolio2 = {
+    ...portfolio,
+    transactions: portfolio.transactions.map((t) => (t.id === transactionId ? voidedTx : t)),
+  }
+
+  /* ---- 5) 内存试算 ---- */
+  const instrumentCurrency = (id: string) =>
+    portfolio.instruments.find((i) => i.id === id)?.currency
+  const isConfirmedCash = (id: string) => {
+    const inst = portfolio.instruments.find((i) => i.id === id)
+    return !!inst && inst.instrumentType === 'cash' && inst.classificationStatus === 'confirmed'
+  }
+
+  const trial = deriveLedger(withVoid.transactions, { instrumentCurrency, isConfirmedCash })
+
+  // 作废会移除一笔交易的效果；若因此暴露其它交易的 issue（例如超卖），一律拒绝
+  if (trial.issues.length > 0) {
+    return {
+      ok: false,
+      code: 'ledger-issue',
+      message: `作废后账本出现问题，已拒绝：${trial.issues[0].detail}`,
+      issues: trial.issues,
+    }
+  }
+
+  /*
+   * ## 为什么这里**不**做「负数持仓」检查
+   *
+   * `sortTransactions` 把 `adjustment` 排在普通交易**之后**
+   * （其语义是「期末设定」）。因此处理过程中持仓可能短暂为负：
+   *
+   * ```
+   * buy:        -1000              → 中间态：现金 -1000
+   * adjustment: 设定为 100000       → 最终态：99000  ✅ 完全正常
+   * ```
+   *
+   * 实现过程中真实踩到这个坑：作废一笔买入被误报成
+   * 「会导致 i_cny_cash 出现负数持仓（-1000）」而被拒绝 ——
+   * 那其实是**合法的最终状态**，只是中间过程为负。
+   *
+   * 真正的非法状态由领域层负责：
+   * - `deriveLedger` 对超卖等非法操作产出 **issue**（上一步已统一拒绝）
+   * - `reconcileHoldings` 在第 9 步做**账实校验**（缓存与 Ledger 是否一致）
+   *
+   * 因此作废路径只依赖这两个权威判定，不自行发明第三套规则。
+   */
+
+  /*
+   * ## 但**最终态**为负必须拦（这是真正的不变量破坏）
+   *
+   * 与上面的中间态不同：如果处理完所有交易后仍然是负数，
+   * 那这个组合本身就是不合法的 —— 典型场景是**作废掉期初 adjustment**：
+   *
+   * ```
+   * adjustment +100000（期初，排在最后）
+   * buy        -1000
+   * 作废 adjustment 后 → 只剩 buy → 最终现金 -1000 ❌ 无任何报错
+   * ```
+   *
+   * `deriveLedger` 对现金腿只做累加、不检查余额，所以必须在这里拦。
+   * 用例见 `transactionVoid.test.ts` 的「作废期初余额」。
+   */
+  const negatives = [...trial.positions.values()].filter(
+    (pos) => pos.quantity < -EPS || pos.costBasis < -EPS,
+  )
+  if (negatives.length > 0) {
+    const worst = negatives[0]
+    return {
+      ok: false,
+      code: 'would-cause-negative',
+      message:
+        `作废该交易会让「${worst.instrumentId}」的最终持仓变成负数` +
+        `（数量 ${worst.quantity}，成本 ${worst.costBasis}）。` +
+        '如果它是期初余额，请改为补录一笔新的期初 adjustment，而不是作废旧的那笔。',
+    }
+  }
+
+  /* ---- 6) 重复持仓检查 ---- */
+  const dup = detectDuplicateHoldings(withVoid)
+  if (!dup.ok) {
+    return { ok: false, code: 'duplicate-holding', message: dup.summary }
+  }
+
+  /* ---- 7) 丢弃「因本次作废而失去全部交易依据」的持仓缓存 ---- */
+  /*
+   * ## 为什么需要这一步（W5 发现的关键缺陷）
+   *
+   * `rebuildFromLedger` 有一条**刻意的保护**：交易里找不到依据的持仓
+   * 会被**保留并标记 orphan**，而不是删除 —— 目的是防止静默丢失用户的资产
+   * （例如手工导入或历史遗留的持仓）。
+   *
+   * 但作废场景下这条保护会误伤：
+   *
+   * ```
+   * 唯一的一笔 BUY 100 股 → 作废 → Ledger 里该持仓归零
+   *   → rebuild 仍保留缓存里的 100 股（视为 orphan）
+   *   → reconcile 报「孤立持仓」
+   *   → 作废被拒绝（作废功能完全不可用）
+   * ```
+   *
+   * 因此：只有当一个持仓键**在作废后不再有任何有效交易依据**、
+   * 且**本次作废正是移除其最后依据的交易**时，才明确丢弃该缓存。
+   *
+   * ⚠️ 这里的删除是**有依据的清理**，不是「为了让测试通过而删数据」：
+   * 该持仓在新的事实集（有效交易）下已不存在，保留它才会造成账实不符。
+   *
+   * manual 口径持仓（房产 / 应收）不受影响 —— 它们本就不由交易驱动。
+   */
+  /*
+   * ⚠️ 效果键必须取自**作废前**的 Ledger。
+   *
+   * 不能问 `trial`（作废后）——那笔交易已被过滤，`entries` 里没有它的效果，
+   * 结果必然是空集，修剪就会失效（这是实现过程中真实踩到的坑）。
+   */
+  const preVoidLedger = deriveLedger(portfolio.transactions, { instrumentCurrency, isConfirmedCash })
+  const effectKeys = new Set<string>()
+  for (const e of preVoidLedger.entries) {
+    if (e.transactionId !== transactionId) continue
+    effectKeys.add(positionKey(e.accountId, e.instrumentId))
+  }
+
+  /*
+   * 划转 / 换汇的**目标侧**效果由 `toAccountId` 推导，
+   * 不在 `entries` 的账户维度里完整体现 —— 必须显式补上，
+   * 否则目标账户上那个只由本交易支撑的持仓会变成孤儿（作废被拒绝）。
+   */
+  if (target.toAccountId) {
+    if (target.instrumentId) {
+      effectKeys.add(positionKey(target.toAccountId, target.instrumentId))
+    }
+    if (target.toCashInstrumentId) {
+      effectKeys.add(positionKey(target.toAccountId, target.toCashInstrumentId))
+    }
+  }
+  // 换汇的换入腿落在**同一账户**的另一个现金标的上
+  if (target.toCashInstrumentId) {
+    effectKeys.add(positionKey(target.accountId, target.toCashInstrumentId))
+  }
+
+  const activeTx = withVoid.transactions.filter((t) => !isVoided(t))
+  const stillBacked = (key: string) => {
+    const [accountId, instrumentId] = key.split('::')
+    return activeTx.some(
+      (t) =>
+        t.accountId === accountId &&
+        (t.instrumentId === instrumentId ||
+          t.cashInstrumentId === instrumentId ||
+          t.toCashInstrumentId === instrumentId),
+    )
+  }
+
+  const droppedOrphans: string[] = []
+  const prunedHoldings = withVoid.holdings.filter((h) => {
+    if (h.valuationMode === 'manual') return true
+    const key = positionKey(h.accountId, h.instrumentId)
+    if (!effectKeys.has(key)) return true
+    if (stillBacked(key)) return true
+    droppedOrphans.push(key)
+    return false
+  })
+  const pruned: Portfolio2 = { ...withVoid, holdings: prunedHoldings }
+
+  /* ---- 8) 从 Ledger 重建缓存 ---- */
+  const rebuilt = rebuildHoldingsFromTransactions(pruned)
+  if (rebuilt.blocked) {
+    return {
+      ok: false,
+      code: 'duplicate-holding',
+      message: rebuilt.duplicateReport?.summary ?? '重建被阻断：存在重复持仓',
+    }
+  }
+  const next: Portfolio2 = { ...pruned, holdings: rebuilt.holdings }
+
+  /* ---- 9) 账实校验 ---- */
+  const rec = reconcileHoldings(next)
+  if (!rec.ok) {
+    return {
+      ok: false,
+      code: 'reconcile-failed',
+      message: `账实校验未通过（${rec.issues.length} 项）：${rec.issues[0]?.detail ?? ''}`,
+    }
+  }
+
+  /* ---- 10) 全部通过：整体写入 ---- */
+  await repo.replaceAll(next)
+
+  return {
+    ok: true,
+    transaction: voidedTx,
+    /** 因失去全部交易依据而被清理的持仓键（便于排查） */
+    droppedOrphans,
+    portfolio: next,
+    rebuilt: {
+      rebuiltCount: rebuilt.rebuiltCount,
+      createdCount: rebuilt.createdCount,
+      preservedCount: rebuilt.preservedCount,
+    },
+    reconcile: { ok: rec.ok, matchedCount: rec.matchedCount, holdingCount: rec.holdingCount },
+  }
+}
+
+/** 查询某笔交易的状态（归一化：undefined → POSTED） */
+export function transactionStatusOf(tx: Transaction): 'POSTED' | 'VOIDED' {
+  return transactionStatus(tx)
+}
+
+/** 供 UI：统计有效 / 已作废数量 */
+export function transactionCounts(txs: Transaction[]): { posted: number; voided: number } {
+  let posted = 0
+  let voided = 0
+  for (const tx of txs) {
+    if (isVoided(tx)) voided += 1
+    else posted += 1
+  }
+  return { posted, voided }
 }
 
 /* ------------------------------------------------------------------ *
