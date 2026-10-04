@@ -24,6 +24,28 @@ import { type Attribution, attribute, computeExchangeFxEffect } from './attribut
 
 const round2 = (n: number) => Math.round(n * 100) / 100
 
+/**
+ * 取**本地日**（`YYYY-MM-DD`）。
+ *
+ * ## 为什么必须用本地日（Phase 8 / W7 修正）
+ *
+ * 此前快照日期用 `toISOString().slice(0,10)`，即 **UTC 日**；
+ * 而交易时间戳由 UI 按**本地中午**写入。对 UTC+8 用户：
+ *
+ * ```
+ * 本地 2026-10-05 07:00 打开应用
+ *   → UTC 仍是 2026-10-04 → 快照日期 = "2026-10-04"
+ *   → byDate("2026-10-04") 命中昨天那份 → already-captured
+ *   → 今天的快照**完全不会产生**（且当天稍后也无法补救）
+ * ```
+ *
+ * 用本地日即可消除这一错位：用户在本地哪一天打开，就落在哪一天。
+ */
+export function localDate(date: Date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
 /** 由日期字符串取上一日（用于找期初快照） */
 export function previousDate(date: string): string {
   const d = new Date(`${date}T00:00:00.000Z`)
@@ -60,7 +82,8 @@ export function buildSnapshot(
   portfolio: Portfolio2,
   options: BuildSnapshotOptions = {},
 ): SnapshotBuildResult {
-  const date = options.date ?? new Date(options.now ?? Date.now()).toISOString().slice(0, 10)
+  // 缺省用**本地日**（见 localDate 的说明）
+  const date = options.date ?? localDate(new Date(options.now ?? Date.now()))
   const fx = options.fx ?? { rates: portfolio.fxRates }
   const policy = options.policy
 
@@ -213,6 +236,8 @@ export function buildSnapshot(
     ending: base,
     flow,
     exchangeFx,
+    // 传入目标日期：触发 opening 间隔检测，避免把「整个间隔期的收益」写成当日收益
+    options: { date },
   })
 
   const snapshot: Snapshot = {
@@ -309,12 +334,37 @@ export async function captureSnapshot(
 }
 
 /** 批量补齐一段日期区间缺失的快照（用于导入后回填），同日幂等 */
+/**
+ * 批量补齐一段日期区间的快照。
+ *
+ * ## ⚠️ W7 起**禁止对过去日期补录**
+ *
+ * 原因：`buildSnapshot` 的估值遍历的是**当前** `portfolio.holdings`、
+ * 取全局**最新**行情、用**当前**汇率 —— 它没有 as-of 能力。
+ * 因此对过去日期调用它，会批量产出
+ * 「日期在过去、数据是现在」的记录，且 `captureKind` 仍被标为 `REAL`。
+ * 那是**伪造历史**，正是本项目明确禁止的行为。
+ *
+ * 在真正的 as-of 重建能力具备之前，本函数只接受「今天」，
+ * 并且在被误用时**明确抛错**而不是静默降级。
+ */
 export async function captureRange(
   repo: PortfolioRepository,
   fromDate: string,
   toDate: string,
   options: Omit<CaptureOptions, 'date'> = {},
 ): Promise<CaptureResult[]> {
+  /*
+   * W7 止血：只允许「今天」。过去日期需要 as-of 估值能力，当前不具备。
+   * 明确抛错优于静默产出假历史。
+   */
+  const today = localDate(new Date(options.now ?? Date.now()))
+  if (fromDate < today || toDate < today) {
+    throw new Error(
+      'captureRange 目前只支持今天：历史日期需要「按当时价格与持仓」重建（as-of），' +
+        '当前不具备该能力。对过去日期补录会产出伪造历史，因此已拒绝。',
+    )
+  }
   const dates: string[] = []
   const cursor = new Date(`${fromDate}T00:00:00.000Z`)
   const end = new Date(`${toDate}T00:00:00.000Z`)

@@ -5,7 +5,7 @@ import App2 from './pages/App2'
 import AppShell from './pages/AppShell'
 import { migrateOnStart } from './lib/db/migrateOnStart'
 import { createDexieRepository } from './lib/db/dexieRepository'
-import { getDb } from './lib/db/dexie'
+import { getDb, requestPersistentStorage } from './lib/db/dexie'
 import { setPreloadedLegacyView, toLegacyView } from './lib/db/toLegacyView'
 import { resolveView } from './lib/viewRouting'
 import './index.css'
@@ -33,6 +33,32 @@ import './index.css'
 async function bootstrap(): Promise<void> {
   // repo 与 db 必须是同一个数据库实例（否则迁移记录与业务数据会分裂到两处）
   let repo = createDexieRepository()
+
+  /*
+   * ## 请求持久化存储（Phase 8 / W7）
+   *
+   * ### 为什么必须做
+   *
+   * IndexedDB 是 2.0 的**唯一事实源**（W1 已断写 localStorage 业务事实），
+   * 而浏览器在存储压力下可以**静默清除**它。iOS Safari 尤其会清理
+   * 长期未访问站点的数据。请求 `persist()` 不能保证一定被授予，
+   * 但能显著降低被自动回收的概率。
+   *
+   * ### 为什么放在迁移之前且不阻塞
+   *
+   * - `requestPersistentStorage` 内部吞掉所有异常，不支持时返回 false；
+   * - 结果写入 meta 供设置页展示诚实状态（**绝不假成功**）；
+   * - 无论成功与否都继续启动 —— 绝不让存储权限阻断正常使用。
+   */
+  try {
+    const persisted = await requestPersistentStorage()
+    await repo.metaKv.set('storage/persisted', {
+      persisted,
+      checkedAt: new Date().toISOString(),
+    })
+  } catch {
+    // 存储状态记录失败不影响启动；也不谎报成功
+  }
 
   try {
     const db = getDb()

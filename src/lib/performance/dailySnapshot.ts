@@ -49,7 +49,7 @@
 
 import type { Snapshot } from '../../types/portfolio2'
 import type { PortfolioRepository } from '../db/repository'
-import { type CaptureOptions, captureSnapshot } from '../performance/snapshot'
+import { type CaptureOptions, captureSnapshot, localDate } from '../performance/snapshot'
 
 /** 尝试状态 */
 export type SnapshotAttemptStatus = 'success' | 'failed'
@@ -93,6 +93,13 @@ export type DailySnapshotOutcome =
   | { action: 'already-captured'; date: string; snapshot: Snapshot; recoveredAttempt: boolean }
   /** 本次成功捕获 */
   | { action: 'captured'; date: string; snapshot: Snapshot }
+  /**
+   * 当天快照已存在、本次**刷新**了它（Phase 8 / W7）。
+   *
+   * 与 `captured` 的区别：`captured` 是当天首次生成，`recaptured` 是同日重算。
+   * 历史快照**永远不会**产生这个动作。
+   */
+  | { action: 'recaptured'; date: string; snapshot: Snapshot }
   /** 今天已尝试过且失败，不再重试 */
   | { action: 'attempted-failed'; date: string; error?: string }
   /** 捕获失败（首次尝试），App 必须继续正常运行 */
@@ -118,15 +125,56 @@ export async function ensureDailySnapshot(
   options: DailySnapshotOptions = {},
 ): Promise<DailySnapshotOutcome> {
   const now = options.now ?? Date.now()
-  const date = options.date ?? new Date(now).toISOString().slice(0, 10)
+  // 用**本地日**：UTC 日会让 UTC+8 用户在清晨被判「昨天已有快照」而整天不捕获
+  const date = options.date ?? localDate(new Date(now))
   const attemptedAt = new Date(now).toISOString()
 
   try {
-    /* ---- 1) 已有当天快照：仅补记 attempt（崩溃恢复路径） ---- */
+    /* ---- 1) 已有当天快照 ---- */
     const existing = await repo.snapshots.byDate(date)
     if (existing) {
+      /*
+       * ## 当日快照允许刷新（Phase 8 / W7 修正）
+       *
+       * ### 原行为及其问题
+       *
+       * 原实现「已存在即返回 already-captured，不做任何捕获」。
+       * 后果：快照在**当天首次打开应用**时被冻结 ——
+       * 之后录入交易、作废交易、改行情、改分类，
+       * 当天快照都仍是清晨那份，而首页却显示「今日快照：已生成」。
+       * 用户会误信当天数据。这与项目「禁止假成功」的原则冲突。
+       *
+       * ### 修正后的语义
+       *
+       * | 情形 | 行为 |
+       * | --- | --- |
+       * | 当天已有快照 | **允许刷新**（同日 upsert，保留 id/createdAt，并记录 capturedAt） |
+       * | 历史已存在的快照 | **绝不触碰**（历史是当时的事实） |
+       * | 月度迁移快照（`positions: []`） | **不刷新**，避免把它改写成日快照 |
+       *
+       * 刷新是幂等的：`captureSnapshot` 按 `&date` 覆盖同一条记录。
+       */
+      /*
+       * 只有「目标日期 === 今天」才刷新。
+       *
+       * 显式传入历史日期（补录/测试）时必须**原样返回** ——
+       * 否则就违反了「历史快照不被回溯改写」这条不变量。
+       */
+      const today = localDate(new Date(now))
       const prior = await readSnapshotAttempt(repo, date)
-      // attempt 缺失或为 failed 时补 success —— 快照在，事实就是成功的
+
+      /*
+       * ### ① 崩溃恢复（先于一切判断）
+       *
+       * 「快照已写入、attempt 尚未写入就崩溃」时，attempt **缺失**。
+       * 此时补记 success 并如实返回 —— 这是事实修复，与日期无关，
+       * 因此必须放在 `date !== today` 判断**之前**。
+       *
+       * `failed` 同理：快照既然在，事实就是成功的。
+       *
+       * ⚠️ 顺序很关键：若先判 `date !== today` 直接返回，
+       * 历史日期的恢复路径就永远不会走到这里（实现过程中真实踩到）。
+       */
       if (!prior || prior.status !== 'success') {
         await repo.metaKv.set(snapshotAttemptKey(date), {
           date,
@@ -136,7 +184,28 @@ export async function ensureDailySnapshot(
         } satisfies SnapshotAttempt)
         return { action: 'already-captured', date, snapshot: existing, recoveredAttempt: true }
       }
-      return { action: 'already-captured', date, snapshot: existing, recoveredAttempt: false }
+
+      /*
+       * ### ② 可否刷新
+       *
+       * | 条件 | 处理 |
+       * | --- | --- |
+       * | 迁移来的月度点（`positions: []`） | **不刷新**，保持原样 |
+       * | 目标日期不是今天 | **不刷新**（历史快照是当时的事实） |
+       * | 今天 + attempt=success | **刷新**（跟上当天后续的录入/作废/改行情） |
+       */
+      const isMigratedMonthly = existing.positions.length === 0
+      if (isMigratedMonthly || date !== today) {
+        return { action: 'already-captured', date, snapshot: existing, recoveredAttempt: false }
+      }
+
+      const refreshed = await captureSnapshot(repo, { ...options, date, now })
+      await repo.metaKv.set(snapshotAttemptKey(date), {
+        date,
+        attemptedAt,
+        status: 'success',
+      } satisfies SnapshotAttempt)
+      return { action: 'recaptured', date, snapshot: refreshed.snapshot }
     }
 
     /* ---- 2) 今天已经尝试过：不再重试 ---- */
@@ -215,6 +284,8 @@ export function describeDailySnapshot(outcome: DailySnapshotOutcome): string {
   switch (outcome.action) {
     case 'captured':
       return '今日资产快照已记录'
+    case 'recaptured':
+      return '今日资产快照已按最新数据刷新'
     case 'already-captured':
       return outcome.recoveredAttempt ? '今日快照已存在（已补记状态）' : '今日快照已记录'
     case 'attempted-failed':

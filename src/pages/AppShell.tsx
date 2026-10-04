@@ -128,6 +128,10 @@ export default function AppShell({
             loading={loading}
             error={error}
             onReload={() => void reload()}
+            coldStart={
+              data.portfolio.accounts.length === 0 && data.portfolio.instruments.length === 0
+            }
+            onGoAssets={() => setTab('assets')}
           />
         ) : tab === 'assets' ? (
           <AssetsPage

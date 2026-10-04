@@ -33,6 +33,9 @@ export interface HomePageProps {
   loading: boolean
   error: string | null
   onReload: () => void
+  /** 冷启动：还没有任何数据时，指向「资产」页建立结构（Phase 8 / W7） */
+  coldStart?: boolean
+  onGoAssets?: () => void
 }
 
 const cny = (n: number) =>
@@ -49,6 +52,8 @@ export default function HomePage({
   loading,
   error,
   onReload,
+  coldStart,
+  onGoAssets,
 }: HomePageProps) {
   const cov = analysis.coverage
   const classBuckets = analysis.byAssetClass.filter((b) => b.key !== 'liability')
@@ -100,10 +105,30 @@ export default function HomePage({
       {/* 每日快照状态 */}
       {daily ? (
         <p className="mt-2 px-1 text-[11px] text-ink4" data-testid="daily-snapshot">
-          {daily.action === 'captured' || daily.action === 'already-captured'
-            ? `今日快照：${daily.action === 'captured' ? '已生成' : '已存在'}`
-            : `今日快照：未生成（${daily.error ?? '原因未知'}）`}
+          {daily.action === 'captured'
+            ? '今日快照：已生成'
+            : daily.action === 'recaptured'
+              ? '今日快照：已按最新数据刷新'
+              : daily.action === 'already-captured'
+                ? '今日快照：已存在'
+                : `今日快照：未生成（${daily.error ?? '原因未知'}）`}
         </p>
+      ) : null}
+
+      {/* 冷启动引导（W7）：还没有数据时明确指向「资产」页建立结构 */}
+      {coldStart ? (
+        <button
+          type="button"
+          onClick={onGoAssets}
+          className="mt-3 w-full rounded-2xl border border-line bg-s1 p-4 text-left"
+          data-testid="home-cold-start"
+        >
+          <p className="text-[14px] font-medium text-ink">先建立你的资产结构</p>
+          <p className="mt-1 text-[11px] leading-relaxed text-ink4">
+            现在还没有任何数据。去「资产」页创建账户与标的，就可以开始记录交易了。
+          </p>
+          <p className="mt-2 text-[12px] text-ink2">前往资产页 →</p>
+        </button>
       ) : null}
 
       {/* 只读提示 */}

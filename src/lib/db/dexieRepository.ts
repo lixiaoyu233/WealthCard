@@ -25,6 +25,7 @@ import type {
   InstrumentRepository,
   PortfolioRepository,
   QuoteRepository,
+  ReplaceAllOptions,
   Repository,
   SnapshotRepository,
   TransactionRepository,
@@ -346,14 +347,32 @@ export function createDexieRepository(db: WealthCardDb = getDb()): PortfolioRepo
       }
     },
 
-    /** 整批替换：在单个事务内完成，避免中途失败留下半套数据 */
-    async replaceAll(portfolio: Portfolio2): Promise<void> {
-      const t = [
+    /**
+     * 整批替换：在单个事务内完成，避免中途失败留下半套数据。
+     *
+     * ## ⚠️ 这不是「导入」原语
+     *
+     * 它是**先 clear 再 bulkPut** 的全量替换：事务原子性只保证「不产生半状态」，
+     * **不保证不丢数据** —— 结构合法但内容错误的输入会成功提交，旧数据永久消失。
+     *
+     * 因此恢复流程**禁止**直接调用它，必须走
+     * `lib/db/backup.ts` 的「校验 → dry-run → 暂存备份 → 原子切换」顺序。
+     *
+     * ## 覆盖范围（W7 修正）
+     *
+     * 原实现漏掉了 `classificationAudit` 与 `meta`，导致恢复后
+     * 审计悬空、迁移记录与数据版本错配。现在按 `options` 一并处理。
+     */
+    async replaceAll(portfolio: Portfolio2, options: ReplaceAllOptions = {}): Promise<void> {
+      const replaceAudit = options.replaceAudit !== false
+      const tables = [
         get().accounts, get().instruments, get().holdings, get().transactions,
         get().quotes, get().fxRates, get().snapshots, get().allocationProfiles,
+        ...(replaceAudit ? [get().classificationAudit] : []),
+        ...(options.metaKv ? [get().meta] : []),
       ]
-      await get().transaction('rw', t, async () => {
-        await Promise.all(t.map((table) => table.clear()))
+      await get().transaction('rw', tables, async () => {
+        await Promise.all(tables.map((table) => table.clear()))
         await get().accounts.bulkPut(portfolio.accounts)
         await get().instruments.bulkPut(portfolio.instruments)
         await get().holdings.bulkPut(portfolio.holdings)
@@ -362,6 +381,14 @@ export function createDexieRepository(db: WealthCardDb = getDb()): PortfolioRepo
         await get().fxRates.bulkPut(portfolio.fxRates)
         await get().snapshots.bulkPut(portfolio.snapshots)
         await get().allocationProfiles.bulkPut(portfolio.allocationProfiles)
+        if (replaceAudit) {
+          await get().classificationAudit.bulkPut(portfolio.classificationAudit ?? [])
+        }
+        if (options.metaKv) {
+          await get().meta.bulkPut(
+            Object.entries(options.metaKv).map(([key, value]) => ({ key, value })),
+          )
+        }
       })
     },
 
@@ -437,6 +464,8 @@ function createMemoryMetaKv(): MetaKeyValueRepository {
 
 export function createInMemoryRepository(): PortfolioRepository {
   let store: Portfolio2 = createEmptyPortfolio2()
+  // 与 `metaKv` 属性共用同一个实例，保证 replaceAll({ metaKv }) 能真正生效
+  const metaKv = createMemoryMetaKv()
 
   const mk = <T extends { id: string }>(getList: () => T[], setList: (l: T[]) => void): Repository<T> => ({
     get: async (id) => getList().find((x) => x.id === id),
@@ -607,10 +636,22 @@ export function createInMemoryRepository(): PortfolioRepository {
       () => store.classificationAudit,
       (l) => (store = { ...store, classificationAudit: l }),
     ),
-    metaKv: createMemoryMetaKv(),
+    metaKv,
     loadPortfolio: async () => store,
-    replaceAll: async (p) => {
-      store = p
+    /**
+     * 内存实现的整批替换（测试用）。
+     *
+     * 与 Dexie 实现保持**相同语义**：`classificationAudit` 默认一并替换，
+     * `metaKv` 给出时覆盖。避免测试与生产行为分叉。
+     */
+    replaceAll: async (p, options: ReplaceAllOptions = {}) => {
+      const next = options.replaceAudit === false ? { ...p, classificationAudit: store.classificationAudit } : p
+      store = next
+      if (options.metaKv) {
+        for (const [key, value] of Object.entries(options.metaKv)) {
+          await metaKv.set(key, value)
+        }
+      }
     },
     clearAll: async () => {
       store = createEmptyPortfolio2()

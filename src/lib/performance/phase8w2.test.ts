@@ -344,7 +344,13 @@ describe('D 每日快照：幂等与崩溃一致性', () => {
     await seed(repo)
     await ensureDailySnapshot(repo, { now: NOW, date: '2026-10-04' })
 
-    // 模拟「快照已写入、attempt 尚未写入就崩溃」
+    /*
+     * 模拟「快照已写入、attempt 尚未写入就崩溃」。
+     *
+     * W7 起 attempt **缺失**被明确定义为崩溃恢复场景：
+     * 补记 success 并返回 already-captured（**不重算**），
+     * 区别于「当天正常生成过（attempt=success）→ 需要刷新跟上后续录入」。
+     */
     await repo.metaKv.remove(snapshotAttemptKey('2026-10-04'))
     expect(await readSnapshotAttempt(repo, '2026-10-04')).toBeUndefined()
 

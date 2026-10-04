@@ -15,7 +15,7 @@ import { rebuildHoldingsFromTransactions } from './rebuild'
 import { reconcileHoldings } from './reconcile'
 import { detectDuplicateHoldings } from './duplicates'
 import { classifyPortfolioFlows } from '../performance/cashflow'
-import { captureSnapshot } from '../performance/snapshot'
+import { captureSnapshot, localDate } from '../performance/snapshot'
 import { ensureDailySnapshot } from '../performance/dailySnapshot'
 import { calculateTotals } from '../valuation/engine'
 import { createFxTable } from '../valuation/fx'
@@ -658,13 +658,50 @@ describe('Snapshot：已作废交易不进入当日现金流归因', () => {
     // 作废该笔交易
     await voidTransaction(repo, id, { now: NOW })
 
-    // 走生产路径：快照已存在 → 直接返回既有快照，不改写
+    /*
+     * W7 起语义细化为：
+     * - **当天**快照允许刷新（否则当天录入/作废后曲线不更新，而 UI 谎报「已生成」）；
+     * - **历史**快照永不触碰。
+     *
+     * 2026-10-02 相对 NOW()=2026-10-04 是**历史**，因此必须原样保留。
+     */
     const again = await ensureDailySnapshot(repo, { date: '2026-10-02', now: NOW().getTime() })
     expect(again.action).toBe('already-captured')
     if (again.action === 'already-captured') {
       expect(again.snapshot.id).toBe(frozenId)
       expect(again.snapshot.externalInflow).toBe(5000) // 历史快照未被回溯修改
     }
+  })
+
+  it('【W7】当天快照会被刷新，但仍保留同一条记录（不新增）', async () => {
+    const repo = await seedRepo()
+    const today = localDate(new Date(NOW().getTime()))
+
+    /*
+     * 走**真实生产路径**生成当天快照（而不是直接调 captureSnapshot）——
+     * 这样 attempt 才会记为 success，后续才会走「刷新」而不是「崩溃恢复」。
+     */
+    const firstOutcome = await ensureDailySnapshot(repo, { date: today, now: NOW().getTime() })
+    expect(firstOutcome.action).toBe('captured')
+    const first = await captureSnapshot(repo, { date: today, now: NOW().getTime() })
+    const before = await repo.snapshots.getAll()
+    expect(before).toHaveLength(1)
+
+    // 当天写入一笔交易后，走生产路径刷新
+    const id = await record(repo, { type: 'deposit', amount: 7777, timestamp: `${today}T10:00:00.000Z` })
+    const outcome = await ensureDailySnapshot(repo, { date: today, now: NOW().getTime() })
+    expect(outcome.action).toBe('recaptured')
+
+    const after = await repo.snapshots.getAll()
+    // 【核心】仍然是同一条记录（&date 唯一索引），只是内容被刷新
+    expect(after).toHaveLength(1)
+    expect(after[0].id).toBe(first.snapshot.id)
+    expect(after[0].netWorth).toBe(first.snapshot.netWorth + 7777)
+
+    // 作废后再次刷新 → 金额随之回落
+    await voidTransaction(repo, id, { now: NOW })
+    await ensureDailySnapshot(repo, { date: today, now: NOW().getTime() })
+    expect((await repo.snapshots.getAll())[0].netWorth).toBe(first.snapshot.netWorth)
   })
 })
 

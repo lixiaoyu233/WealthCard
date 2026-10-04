@@ -157,6 +157,29 @@ export interface TransactionRepository extends Repository<Transaction> {
  * 之所以允许整取：个人资产规模有限（数百条持仓），
  * 一次性读取比多次异步往返更简单可靠；数据量增长后可再分片。
  */
+/**
+ * `replaceAll` 的可选参数（Phase 8 / W7）。
+ *
+ * W7 审计发现：原实现只替换 8 张表，**不含 `classificationAudit` 与 `meta`**。
+ * 后果：从旧备份恢复后，审计条目指向已不存在的标的（引用悬空），
+ * 且 `meta` 里的迁移记录与导入数据的版本错配
+ * （会出现「记录说已迁移但数据是旧版本」）。
+ *
+ * 因此恢复路径必须能够一并替换这两张表。
+ */
+export interface ReplaceAllOptions {
+  /**
+   * 是否连同 `classificationAudit` 一起替换。
+   * 缺省 `true`（恢复语义：整体替换）；迁移/转换等场景可显式传 `false` 保留审计。
+   */
+  replaceAudit?: boolean
+  /**
+   * 要写入的 `meta` 键值。给出时**先清空 meta 再写入**，保证版本标记与数据一致。
+   * 不给出时保持 meta 不变（迁移场景需要保留 appliedMigrations）。
+   */
+  metaKv?: Record<string, unknown>
+}
+
 export interface PortfolioRepository {
   /** 分类审计（独立于 Instrument，便于追溯全部历史变更） */
   classificationAudit: Repository<ClassificationAuditEntry>
@@ -174,7 +197,7 @@ export interface PortfolioRepository {
   /** 取出完整组合（供估值/分析使用） */
   loadPortfolio(): Promise<Portfolio2>
   /** 整批替换（迁移用）；实现方应在事务中完成 */
-  replaceAll(portfolio: Portfolio2): Promise<void>
+  replaceAll(portfolio: Portfolio2, options?: ReplaceAllOptions): Promise<void>
   /** 全清（导入前备份等场景） */
   clearAll(): Promise<void>
   /** 统计各表条数，供诊断与迁移校验 */

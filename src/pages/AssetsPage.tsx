@@ -15,6 +15,11 @@ import ClassifySheet from '../components/ClassifySheet'
 import CashConvertSheet from '../components/CashConvertSheet'
 import DuplicateSheet from '../components/DuplicateSheet'
 import QuoteSheet from '../components/QuoteSheet'
+import AccountSheet from '../components/AccountSheet'
+import InstrumentSheet from '../components/InstrumentSheet'
+import ManualHoldingSheet from '../components/ManualHoldingSheet'
+import ColdStartGuide from '../components/ColdStartGuide'
+import { coldStartStateOf } from '../lib/db/creation'
 import {
   ACCOUNT_TYPE_LABEL,
   ASSET_CLASS_LABEL,
@@ -106,6 +111,11 @@ export default function AssetsPage({
   const [dupOpen, setDupOpen] = useState(false)
   const [quoteOpen, setQuoteOpen] = useState(false)
   const [quoteFor, setQuoteFor] = useState<string | undefined>(undefined)
+  const [accountOpen, setAccountOpen] = useState(false)
+  const [instrumentOpen, setInstrumentOpen] = useState(false)
+  const [manualOpen, setManualOpen] = useState(false)
+
+  const coldStart = useMemo(() => coldStartStateOf(portfolio), [portfolio])
 
   const duplicates = useMemo(() => detectDuplicateHoldings(portfolio), [portfolio])
   const unconfirmedCount = analysis.coverage.unconfirmedCount
@@ -181,6 +191,14 @@ export default function AssetsPage({
 
   return (
     <div className="mx-auto w-full max-w-[480px] px-4 pb-24">
+      {/* 冷启动引导（W7）：没有数据时明确告诉用户下一步做什么 */}
+      <ColdStartGuide
+        state={coldStart}
+        onCreateAccount={() => setAccountOpen(true)}
+        onCreateInstrument={() => setInstrumentOpen(true)}
+        onCreateManualHolding={() => setManualOpen(true)}
+      />
+
       {/* 业务操作入口 —— 全部走 Repository / Domain API */}
       <section className="mt-4 space-y-2" data-testid="asset-actions">
         <button
@@ -229,6 +247,34 @@ export default function AssetsPage({
             </span>
           </button>
         ) : null}
+
+        {/* W7：冷启动创建入口 */}
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setAccountOpen(true)}
+            className="flex-1 rounded-2xl border border-line bg-s1 px-3 py-2.5 text-left text-[12px] text-ink2"
+            data-testid="action-create-account"
+          >
+            创建账户
+          </button>
+          <button
+            type="button"
+            onClick={() => setInstrumentOpen(true)}
+            className="flex-1 rounded-2xl border border-line bg-s1 px-3 py-2.5 text-left text-[12px] text-ink2"
+            data-testid="action-create-instrument"
+          >
+            创建标的
+          </button>
+          <button
+            type="button"
+            onClick={() => setManualOpen(true)}
+            className="flex-1 rounded-2xl border border-line bg-s1 px-3 py-2.5 text-left text-[12px] text-ink2"
+            data-testid="action-create-manual"
+          >
+            手动持仓
+          </button>
+        </div>
 
         {/* W6：行情录入入口（补齐「行情只减不增」的能力断点） */}
         <button
@@ -467,6 +513,24 @@ export default function AssetsPage({
       ) : null}
 
       {dupOpen ? <DuplicateSheet duplicates={duplicates} onClose={() => setDupOpen(false)} /> : null}
+
+      {accountOpen ? (
+        <AccountSheet open onClose={() => setAccountOpen(false)} repo={repo} onCreated={onChanged} />
+      ) : null}
+
+      {instrumentOpen ? (
+        <InstrumentSheet open onClose={() => setInstrumentOpen(false)} repo={repo} onCreated={onChanged} />
+      ) : null}
+
+      {manualOpen ? (
+        <ManualHoldingSheet
+          open
+          onClose={() => setManualOpen(false)}
+          portfolio={portfolio}
+          repo={repo}
+          onCreated={onChanged}
+        />
+      ) : null}
 
       {quoteOpen ? (
         <QuoteSheet

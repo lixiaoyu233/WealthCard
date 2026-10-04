@@ -75,9 +75,37 @@ export type AttributionStatus = 'complete' | 'partial' | 'unavailable'
 export interface AttributionOptions {
   /** 残差容差（人民币）。超过则视为异常而非浮点误差 */
   residualTolerance?: number
+  /**
+   * 本次归因的目标日期（`YYYY-MM-DD`）。给出时会做 **opening 间隔检测**。
+   *
+   * 为什么需要（Phase 8 / W7 止血）：期初快照的选取是
+   * 「date 之前日期最大的一条」，**不检查间隔**。
+   * 若用户多日未打开应用（或刚迁移完，只有月度快照），
+   * 期初可能是几周前甚至一个月前 —— 于是
+   * `investmentReturn = 今日净资产 − 上月净资产 − 今日现金流`
+   * 会把**整个期间的收益**当成「当天投资收益」写进快照并永久保存，
+   * 事后无法识别。
+   *
+   * 给出 `date` 后，间隔异常会被**结构化降级**而不是照常计算。
+   */
+  date?: string
 }
 
 export const DEFAULT_RESIDUAL_TOLERANCE = 1 // 1 元
+
+/**
+ * 计算期初快照与目标日期相隔的天数。
+ *
+ * 两个日期都缺失或无法解析时返回 `undefined`（表示**无法判断**，
+ * 此时不做间隔降级 —— 不因为「不知道」就拒绝计算）。
+ */
+export function openingGapDays(opening: { date?: string }, date?: string): number | undefined {
+  if (!opening?.date || !date) return undefined
+  const a = Date.parse(`${opening.date}T00:00:00Z`)
+  const b = Date.parse(`${date}T00:00:00Z`)
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return undefined
+  return Math.round((b - a) / 86_400_000)
+}
 
 /* ------------------------------------------------------------------ *
  * 结果
@@ -272,6 +300,31 @@ export function attribute(input: AttributionInput): Attribution {
       feeTotal: flow.feeTotal,
       internalTransferCount: flow.internalTransferCount,
       notes: ['这是首份快照，没有期初数据，无法计算变化'],
+    }
+  }
+
+  /*
+   * ---- opening 间隔检测（W7 止血） ----
+   *
+   * 期初必须是**紧邻的前一天**。否则所谓「投资收益」实际是整个间隔期的收益，
+   * 把它写成当日收益会造成语义错误且事后不可识别。
+   *
+   * 这里的做法是**结构化降级**：
+   * - 不猜测、不摊平、不年化；
+   * - 金额字段一律留 `undefined`（不可估值 ≠ 0 的同一条原则）；
+   * - 把原因写进 `notes`，让 UI 能如实展示「缺 N 天数据，无法计算收益」。
+   */
+  const gap = openingGapDays(opening, input.options?.date)
+  if (gap !== undefined && gap > 1) {
+    return {
+      status: 'unavailable',
+      feeTotal: flow.feeTotal,
+      internalTransferCount: flow.internalTransferCount,
+      notes: [
+        `期初快照是 ${opening.date}，与目标日期相隔 ${gap} 天（缺少中间日期的快照）。`,
+        '期间收益无法拆分为「单日收益」，因此不计算投资收益率（不猜测、不摊平）。',
+        '补齐缺失日期的快照后即可正常归因。',
+      ],
     }
   }
 

@@ -199,6 +199,18 @@ export default function App() {
   }
 
   const handleImport = (file: File) => {
+    /*
+     * ⚠️ 只读模式下**必须先拒绝**，不能显示成功（Phase 8 / W7 修复）。
+     *
+     * 原实现的问题：`importPortfolio` 内部遇到只读会直接 `return`（静默不写），
+     * 但这里仍然无条件 `notify('已导入 N 个分类', 'success')` —— 数据没变却报成功。
+     * 这违反 `lib/readOnly.ts` 明确写下的「禁止假成功」原则。
+     * 而 2.0 设备上只读是**默认状态**，所以这是默认路径上的真实缺陷。
+     */
+    if (isReadOnlyMode()) {
+      notify('只读模式下无法导入：请先完成迁移，或使用新版的「备份与恢复」功能', 'error')
+      return
+    }
     const reader = new FileReader()
     reader.onload = () => {
       try {
