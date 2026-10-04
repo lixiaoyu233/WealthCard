@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   type DbMeta,
   type MigrationRecord,
+  MIGRATION_CHAIN,
   PORTFOLIO_SCHEMA_VERSION,
   SCHEMA_V3_TO_V4_MIGRATION_ID,
+  SCHEMA_V4_TO_V5_MIGRATION_ID,
   createDefaultDbMeta,
   detectSchemaFamily,
   detectSourceVersion,
@@ -55,7 +57,7 @@ describe('schema：结构族识别', () => {
 
   it('新持久化 Schema 版本为 3，与旧数据版本 2 不同名', async () => {
     // 这是命名问题的回归：旧数据 version 已经是 2，新 schema 必须另起一号
-    expect(PORTFOLIO_SCHEMA_VERSION).toBe(4)
+    expect(PORTFOLIO_SCHEMA_VERSION).toBe(5)
   })
 
   it('关键：旧数据 version 也是 2，不能靠 version 判断', async () => {
@@ -73,7 +75,7 @@ describe('schema：结构族识别', () => {
 
   it('migrationId 与版本对绑定', async () => {
     // 迁移 id 随目标 schema 版本变化：V4 是当前目标
-    expect(migrationIdFor(2, PORTFOLIO_SCHEMA_VERSION)).toBe('legacy-v2-to-schema-v4')
+    expect(migrationIdFor(2, PORTFOLIO_SCHEMA_VERSION)).toBe('legacy-v2-to-schema-v5')
     expect(migrationIdFor(2, 3)).toBe('legacy-v2-to-schema-v3')
   })
 
@@ -101,6 +103,7 @@ describe('调度：首次迁移成功', () => {
     expect(store.meta?.appliedMigrations).toEqual([
       migrationIdFor(2, PORTFOLIO_SCHEMA_VERSION),
       SCHEMA_V3_TO_V4_MIGRATION_ID,
+      SCHEMA_V4_TO_V5_MIGRATION_ID,
     ])
   })
 
@@ -144,6 +147,7 @@ describe('调度：幂等（可重复执行）', () => {
     expect(store.meta?.appliedMigrations).toEqual([
       migrationIdFor(2, PORTFOLIO_SCHEMA_VERSION),
       SCHEMA_V3_TO_V4_MIGRATION_ID,
+      SCHEMA_V4_TO_V5_MIGRATION_ID,
     ])
   })
 
@@ -155,9 +159,10 @@ describe('调度：幂等（可重复执行）', () => {
      * 关键断言是**不再增长** —— 连跑三次与跑一次的结果必须相同。
      */
     const successes = store.log.filter((r) => r.status === 'success')
-    expect(successes).toHaveLength(2)
+    // 迁移链步骤数 = 链条数组长度；关键是**不重复增长**
+    expect(successes).toHaveLength(MIGRATION_CHAIN.length)
     const ids = successes.map((r) => r.migrationId)
-    expect(new Set(ids).size).toBe(2) // 各步骤只成功一次，没有重复
+    expect(new Set(ids).size).toBe(MIGRATION_CHAIN.length)
   })
 
   it('已是新结构的数据不会被当成旧数据再迁一次', async () => {
@@ -212,6 +217,7 @@ describe('调度：失败处理（旧数据必须保留）', () => {
     await migrate({ legacy: { foo: 'bar' }, store, now: fixedClock })
     const again = await await migrate({ legacy: { foo: 'bar' }, store, now: fixedClock })
     expect(again.status).toBe('failed')
+    // 失败迁移不会写入任何 v3/v4/v5 步骤记录，因此只有两次失败尝试
     expect(store.log).toHaveLength(2)
     expect(store.meta).toBeNull()
   })

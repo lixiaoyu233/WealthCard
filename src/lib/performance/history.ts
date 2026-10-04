@@ -32,6 +32,44 @@ import type { Snapshot } from '../../types/portfolio2'
 const round2 = (n: number) => Math.round(n * 100) / 100
 
 /* ------------------------------------------------------------------ *
+ * captureKind 解析
+ * ------------------------------------------------------------------ */
+
+/**
+ * 快照来源标记。
+ *
+ * | 值 | 含义 |
+ * | --- | --- |
+ * | `REAL` | 当日真实捕获 |
+ * | `BACKFILLED` | 历史补齐 |
+ * | `ESTIMATED` | 估算 |
+ * | `UNKNOWN` | **未标记来源**（旧快照没有 `captureKind` 字段） |
+ *
+ * ## 为什么 `undefined` 是 UNKNOWN 而不是 REAL
+ *
+ * `undefined` 表达的语义是「这条历史记录没有记录 provenance」。
+ * 把它解释成 `REAL` 等于**把「未知」推断成「真实」**，
+ * 与「不伪造、不回填、不推测」的原则冲突。
+ *
+ * 而且本项目的历史数据**确实不是 REAL**：生产代码中创建快照的唯一位置是
+ * `legacy-v2-to-schema-v3.ts`（旧版**月度走势**，无持仓明细，position 为空）。
+ * 因此 `undefined → UNKNOWN` 是有依据的判定，不是保守猜测。
+ */
+export type CaptureKind = 'REAL' | 'BACKFILLED' | 'ESTIMATED' | 'UNKNOWN'
+
+export function snapshotCaptureKind(snapshot: Snapshot): CaptureKind {
+  return snapshot.captureKind ?? 'UNKNOWN'
+}
+
+/** 供 UI 展示的来源文案 */
+export const CAPTURE_KIND_LABEL: Record<CaptureKind, string> = {
+  REAL: '当日真实捕获',
+  BACKFILLED: '历史补齐',
+  ESTIMATED: '估算值',
+  UNKNOWN: '历史快照 · 来源未标记',
+}
+
+/* ------------------------------------------------------------------ *
  * 单点构成
  * ------------------------------------------------------------------ */
 
@@ -109,6 +147,10 @@ export interface TrendPoint {
   date: string
   /** 净资产（直接取快照值，不重算） */
   netWorth: number
+  /** 快照来源（REAL / BACKFILLED / ESTIMATED / UNKNOWN） */
+  captureKind: CaptureKind
+  /** 来源文案，可直接展示 */
+  captureKindLabel: string
   /** 是否有可用的历史分类 */
   hasClassification: boolean
   /** 无分类时的原因 */
@@ -158,6 +200,8 @@ export function buildCompositionTrend(
       points.push({
         date: snap.date,
         netWorth: snap.netWorth,
+        captureKind: snapshotCaptureKind(snap),
+        captureKindLabel: CAPTURE_KIND_LABEL[snapshotCaptureKind(snap)],
         hasClassification: true,
         byClass: comp.byClass,
         byClassShare: comp.byClassShare,
@@ -170,6 +214,8 @@ export function buildCompositionTrend(
       points.push({
         date: snap.date,
         netWorth: snap.netWorth,
+        captureKind: snapshotCaptureKind(snap),
+        captureKindLabel: CAPTURE_KIND_LABEL[snapshotCaptureKind(snap)],
         hasClassification: false,
         unavailableReason: comp.reason,
         isComplete: comp.isComplete,

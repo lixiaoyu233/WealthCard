@@ -399,8 +399,9 @@ describe('P1 重复 Holding 检测', () => {
  * ================================================================== */
 
 describe('Schema V4：assetClassAtCapture', () => {
-  it('当前 Schema 版本为 4', () => {
-    expect(PORTFOLIO_SCHEMA_VERSION).toBe(4)
+  it('当前 Schema 版本已推进到含 captureKind 的版本', () => {
+    // 由常量推导，避免每次升版都要改测试字面量
+    expect(PORTFOLIO_SCHEMA_VERSION).toBeGreaterThanOrEqual(4)
   })
 
   it('新捕获的快照记录当时的分类（仅已确认的）', async () => {

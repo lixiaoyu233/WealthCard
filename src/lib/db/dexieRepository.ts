@@ -19,6 +19,7 @@ import { createEmptyPortfolio2 } from '../../types/portfolio2'
 import { type WealthCardDb, getDb } from './dexie'
 import type {
   ClassificationAuditEntry,
+  MetaKeyValueRepository,
   FxRateRepository,
   HoldingRepository,
   InstrumentRepository,
@@ -193,6 +194,30 @@ function createInstrumentRepository(db: () => WealthCardDb): InstrumentRepositor
   }
 }
 
+/**
+ * `meta` 表的键值仓储实现。
+ *
+ * ⚠️ 只放操作状态，不放资产事实。
+ */
+function createMetaKvRepository(db: () => WealthCardDb): MetaKeyValueRepository {
+  return {
+    get: async <T,>(key: string) => {
+      const row = await db().meta.get(key)
+      return row?.value as T | undefined
+    },
+    set: async (key, value) => {
+      await db().meta.put({ key, value })
+    },
+    remove: async (key) => {
+      await db().meta.delete(key)
+    },
+    keysWithPrefix: async (prefix) => {
+      const keys = await db().meta.toCollection().primaryKeys()
+      return (keys as string[]).filter((k) => k.startsWith(prefix))
+    },
+  }
+}
+
 /** 写入一条审计记录（confirm / unconfirm 共用，保证链路完整） */
 async function appendAudit(
   db: () => WealthCardDb,
@@ -300,6 +325,7 @@ export function createDexieRepository(db: WealthCardDb = getDb()): PortfolioRepo
     snapshots: createSnapshotRepository(get),
     allocationProfiles: createRepository<AllocationProfile>(() => get().allocationProfiles),
     classificationAudit: createRepository<ClassificationAuditEntry>(() => get().classificationAudit),
+    metaKv: createMetaKvRepository(get),
 
     async loadPortfolio(): Promise<Portfolio2> {
       const [accounts, instruments, holdings, transactions, quotes, fxRates, snapshots, allocationProfiles, classificationAudit] =
@@ -396,6 +422,17 @@ export async function createPairedTestStore(name: string): Promise<{
   const db = new WealthCardDb(name)
   await db.open()
   return { repo: createDexieRepository(db), db }
+}
+
+/** 内存版 meta 键值仓储（与 Dexie 版语义一致） */
+function createMemoryMetaKv(): MetaKeyValueRepository {
+  const map = new Map<string, unknown>()
+  return {
+    get: async <T,>(key: string) => map.get(key) as T | undefined,
+    set: async (key, value) => void map.set(key, value),
+    remove: async (key) => void map.delete(key),
+    keysWithPrefix: async (prefix) => [...map.keys()].filter((k) => k.startsWith(prefix)),
+  }
 }
 
 export function createInMemoryRepository(): PortfolioRepository {
@@ -570,6 +607,7 @@ export function createInMemoryRepository(): PortfolioRepository {
       () => store.classificationAudit,
       (l) => (store = { ...store, classificationAudit: l }),
     ),
+    metaKv: createMemoryMetaKv(),
     loadPortfolio: async () => store,
     replaceAll: async (p) => {
       store = p

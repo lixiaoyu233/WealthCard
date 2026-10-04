@@ -548,6 +548,21 @@ export interface Snapshot {
   staleCount?: number
   /** 是否全部可靠估值（unavailable 与 stale 都为 0） */
   isComplete?: boolean
+  /**
+   * **快照来源标记**（Schema V5 新增）。
+   *
+   * | 值 | 含义 |
+   * | --- | --- |
+   * | `REAL` | 当日真实捕获 |
+   * | `BACKFILLED` | 历史补齐 |
+   * | `ESTIMATED` | 估算 |
+   * | `undefined` | **来源未标记**（v4 及以前的旧快照） |
+   *
+   * ⚠️ `undefined` **不得**按 `REAL` 解释 —— 那等于把「未知」推断成「真实」。
+   * 读取层统一解析为 `UNKNOWN`（见 `performance/history.ts` 的 `snapshotCaptureKind`）。
+   * 本阶段只产生 `REAL`，不实现 BACKFILLED / ESTIMATED。
+   */
+  captureKind?: 'REAL' | 'BACKFILLED' | 'ESTIMATED'
   /** 归因可信度 */
   attributionStatus: AttributionStatus
   /** 无法完整归因时的原因清单 */

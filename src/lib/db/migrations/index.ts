@@ -30,14 +30,15 @@ import {
   type LegacyNetWorthPointLike,
   type LegacyPortfolioLike,
 } from './legacy-v2-to-schema-v3'
-import { SCHEMA_VERSION_WITH_ASSET_CLASS_AT_CAPTURE } from '../schema'
+import { SCHEMA_VERSION_WITH_ASSET_CLASS_AT_CAPTURE, SCHEMA_VERSION_WITH_CAPTURE_KIND } from '../schema'
 import { SCHEMA_V3_TO_V4_MIGRATION_ID, migrateV3ToV4 } from './schema-v3-to-v4'
+import { SCHEMA_V4_TO_V5_MIGRATION_ID, migrateV4ToV5 } from './schema-v4-to-v5'
 import { summarizeVerify, verifyMigration, type VerifyReport } from './verify'
 
 import type { MigrationStore } from '../repository'
 
 export type { MigrationStore }
-export { SCHEMA_V3_TO_V4_MIGRATION_ID }
+export { SCHEMA_V3_TO_V4_MIGRATION_ID, SCHEMA_V4_TO_V5_MIGRATION_ID }
 
 export type MigrateOutcome =
   | { status: 'skipped'; reason: 'no-data' | 'already-migrated'; record?: MigrationRecord }
@@ -176,19 +177,30 @@ export async function migrate(options: MigrateOptions): Promise<MigrateOutcome> 
    *
    * 正确判据：源版本低于引入该字段的版本，且该迁移尚未应用过（幂等）。
    */
-  const alreadyApplied = applied.includes(SCHEMA_V3_TO_V4_MIGRATION_ID)
+  let current = result.portfolio
+
+  const alreadyAppliedV4 = applied.includes(SCHEMA_V3_TO_V4_MIGRATION_ID)
   const sourceBelowV4 = (sourceVersion ?? 0) < SCHEMA_VERSION_WITH_ASSET_CLASS_AT_CAPTURE
-  if (!alreadyApplied && sourceBelowV4) {
-    const upgraded = migrateV3ToV4({ portfolio: result.portfolio, now: iso })
-    await store.writePortfolio(upgraded.portfolio)
+  if (!alreadyAppliedV4 && sourceBelowV4) {
+    const upgraded = migrateV3ToV4({ portfolio: current, now: iso })
+    current = upgraded.portfolio
+    await store.writePortfolio(current)
     await appendLog(store, upgraded.record)
     applied.push(SCHEMA_V3_TO_V4_MIGRATION_ID)
-    await store.writeMeta({
-      schemaVersion: target,
-      appliedMigrations: applied,
-      updatedAt: iso(),
-    })
-    return { status: 'success', record, portfolio: upgraded.portfolio, verify }
+  }
+
+  /*
+   * V4 → V5：快照来源标记（captureKind）。
+   * 同样是**零填充**：不给存量快照写 REAL，只推进版本并记录「未标记」事实。
+   */
+  const alreadyAppliedV5 = applied.includes(SCHEMA_V4_TO_V5_MIGRATION_ID)
+  const sourceBelowV5 = (sourceVersion ?? 0) < SCHEMA_VERSION_WITH_CAPTURE_KIND
+  if (!alreadyAppliedV5 && sourceBelowV5) {
+    const upgraded = migrateV4ToV5({ portfolio: current, now: iso })
+    current = upgraded.portfolio
+    await store.writePortfolio(current)
+    await appendLog(store, upgraded.record)
+    applied.push(SCHEMA_V4_TO_V5_MIGRATION_ID)
   }
 
   await store.writeMeta({
@@ -196,8 +208,8 @@ export async function migrate(options: MigrateOptions): Promise<MigrateOutcome> 
     appliedMigrations: applied,
     updatedAt: iso(),
   })
+  return { status: 'success', record, portfolio: current, verify }
 
-  return { status: 'success', record, portfolio: result.portfolio, verify }
 }
 
 /** 迁移结果的一句话说明，供界面提示 */

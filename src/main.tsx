@@ -1,6 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
+import App2 from './pages/App2'
 import { migrateOnStart } from './lib/db/migrateOnStart'
 import { createDexieRepository } from './lib/db/dexieRepository'
 import { getDb } from './lib/db/dexie'
@@ -51,10 +52,20 @@ async function bootstrap(): Promise<void> {
   const container = document.getElementById('root')
   if (!container) throw new Error('#root 容器不存在')
 
+  /*
+   * W2 视图开关（Phase 8 / W2）
+   *
+   * `?w2=1` → 新版只读视图（首页 / 资产管理）
+   * 缺省     → 1.0 旧界面（W1 的只读降级状态，保持不变）
+   *
+   * 替换旧 UI 属于 W3，因此这里用参数切换而不是直接接管。
+   */
+  const useW2 =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('w2') === '1'
+
   createRoot(container).render(
-    <StrictMode>
-      <App />
-    </StrictMode>,
+    <StrictMode>{useW2 ? <App2 /> : <App />}</StrictMode>,
   )
 }
 

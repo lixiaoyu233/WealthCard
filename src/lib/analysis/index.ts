@@ -187,4 +187,5 @@ export function dimensionsOfHolding(view: AnalysisView, holdingId: string): Reco
 }
 
 export { buildCoverage } from './coverage'
+export type { AnalysisView, AnalysisRow, GroupBucket, Coverage, DimensionKey, ClassifiedAssetClass } from './types'
 export type { Holding }

@@ -112,6 +112,24 @@ export interface FxRateRepository extends Repository<FxRate> {
   upsertLatest(rate: FxRate): Promise<void>
 }
 
+/**
+ * 轻量键值状态仓储（`meta` 表）。
+ *
+ * ⚠️ **只允许放「操作状态」，绝不允许放资产事实**。
+ *
+ * 当前用途：每日快照的「今日是否已尝试」标记。
+ * 为什么放这里而不是新建表：它就是一个键值状态，
+ * `meta` 表本来就是干这个的（迁移记录也在其中），
+ * 不为一个标记再建立一套体系。
+ */
+export interface MetaKeyValueRepository {
+  get<T = unknown>(key: string): Promise<T | undefined>
+  set(key: string, value: unknown): Promise<void>
+  remove(key: string): Promise<void>
+  /** 按前缀列出键（用于清理过期状态） */
+  keysWithPrefix(prefix: string): Promise<string[]>
+}
+
 export interface SnapshotRepository extends Repository<Snapshot> {
   byDate(date: string): Promise<Snapshot | undefined>
   /**
@@ -150,6 +168,8 @@ export interface PortfolioRepository {
   fxRates: FxRateRepository
   snapshots: SnapshotRepository
   allocationProfiles: Repository<AllocationProfile>
+  /** 轻量操作状态（非资产事实），见 `MetaKeyValueRepository` 注释 */
+  metaKv: MetaKeyValueRepository
 
   /** 取出完整组合（供估值/分析使用） */
   loadPortfolio(): Promise<Portfolio2>

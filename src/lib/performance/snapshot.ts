@@ -164,6 +164,8 @@ export function buildSnapshot(
     unavailableCount,
     staleCount,
     isComplete: unavailableCount === 0 && staleCount === 0,
+    // 本阶段只产生 REAL；BACKFILLED / ESTIMATED 留待未来的回填功能
+    captureKind: 'REAL',
     attributionStatus: 'unavailable',
     createdAt: new Date(options.now ?? Date.now()).toISOString(),
   }

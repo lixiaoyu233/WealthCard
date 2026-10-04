@@ -53,24 +53,25 @@ describe('迁移写入 IndexedDB', () => {
     const meta = await store.readMeta()
     // 迁移链：Legacy V2 → Schema V3 → Schema V4
     expect(meta?.appliedMigrations).toEqual([
-      'legacy-v2-to-schema-v4',
+      'legacy-v2-to-schema-v5',
       'schema-v3-to-v4-asset-class-at-capture',
+      'schema-v4-to-v5-capture-kind',
     ])
-    expect(meta?.schemaVersion).toBe(4)
+    expect(meta?.schemaVersion).toBe(5)
   })
 
   it('迁移日志写入 IndexedDB，含版本与计数', async () => {
     await migrate({ legacy: createLegacyFixture(), store })
     const log = await store.readLog()
     // 迁移链有两个步骤：v2→v4（内部经 v3）+ v3→v4（快照分类快照）
-    expect(log).toHaveLength(2)
+    expect(log).toHaveLength(3)
     expect(log[0]).toMatchObject({
-      migrationId: 'legacy-v2-to-schema-v4',
+      migrationId: 'legacy-v2-to-schema-v5',
       sourceSchemaVersion: 2,
-      targetSchemaVersion: 4,
+      targetSchemaVersion: 5,
       sourceFamily: 'legacy',
       sourceLabel: 'Legacy V2',
-      targetLabel: 'Portfolio Schema V4',
+      targetLabel: 'Portfolio Schema V5',
       status: 'success',
     })
     expect(log[0].counts?.legacyItems).toBe(15)
@@ -78,6 +79,9 @@ describe('迁移写入 IndexedDB', () => {
     // 第二条是 v3→v4 的独立步骤，且**不回填**历史分类
     expect(log[1].migrationId).toBe('schema-v3-to-v4-asset-class-at-capture')
     expect(log[1].note).toContain('不回填')
+    // 第三条是 v4→v5：仅记录来源未标记，不回填 REAL
+    expect(log[2].migrationId).toBe('schema-v4-to-v5-capture-kind')
+    expect(log[2].note).toContain('不回填')
   })
 
   it('幂等：重复迁移不重复写入，且不新增实体', async () => {
@@ -90,7 +94,7 @@ describe('迁移写入 IndexedDB', () => {
     const after = await repo.counts()
     expect(after).toEqual(before)
     // 迁移链两个步骤各一条，重复执行不再增长
-    expect(await store.readLog()).toHaveLength(2)
+    expect(await store.readLog()).toHaveLength(3)
   })
 
   it('再次启动（已有数据、旧数据仍在）时判定已迁移', async () => {
@@ -116,6 +120,7 @@ describe('迁移失败保护', () => {
   it('失败后再次尝试仍会重跑（幂等标记未写入）', async () => {
     await migrate({ legacy: { foo: 'bar' }, store })
     await migrate({ legacy: { foo: 'bar' }, store })
+    // 两次失败尝试各一条记录；失败时不会执行 v3→v4 / v4→v5 步骤
     expect(await store.readLog()).toHaveLength(2)
     expect(await store.readMeta()).toBeNull()
   })
