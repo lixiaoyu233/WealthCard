@@ -120,11 +120,24 @@ export function rebuildHoldingsFromTransactions(portfolio: Portfolio2): RebuildR
 }
 
 /** 重建时统一使用与迁移/转换一致的标的判定 */
+/**
+ * 派生时需要的标的查表函数。
+ *
+ * ## 为什么用 Map（Phase 8 / W9，P2-2）
+ *
+ * 原实现把两个查表都写成 `portfolio.instruments.find(...)`。这两个闭包会在
+ * `deriveLedgerEffects` 里**逐笔交易**被调用（`derive.ts:243`、`:265-266`、`:289-291`），
+ * 于是整体代价是 `O(T × I)` —— T=2,000 / I=2,000 时【估算】27.8ms，
+ * 而一次性建 Map 只需 0.30ms（约 92×）。
+ *
+ * 语义完全不变：查不到仍返回 `undefined` / `false`。
+ */
 export function ledgerOptionsFor(portfolio: Portfolio2) {
+  const instrumentById = new Map(portfolio.instruments.map((i) => [i.id, i]))
   return {
-    instrumentCurrency: (id: string) => portfolio.instruments.find((i) => i.id === id)?.currency,
+    instrumentCurrency: (id: string) => instrumentById.get(id)?.currency,
     isConfirmedCash: (id: string) => {
-      const inst = portfolio.instruments.find((i) => i.id === id)
+      const inst = instrumentById.get(id)
       return !!inst && inst.instrumentType === 'cash' && inst.classificationStatus === 'confirmed'
     },
   }

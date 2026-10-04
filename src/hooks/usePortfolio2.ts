@@ -57,9 +57,36 @@ export interface UsePortfolio2State {
  *
  * **纯函数**（除了读 Repository）：不写任何存储，便于测试与复用。
  */
+/**
+ * 趋势默认预计算窗口（天）。
+ *
+ * ## 为什么需要窗口（Phase 8 / W9，P1-1）
+ *
+ * `buildCompositionTrend` 会对**每一个**快照调用 `compositionAtCapture`，
+ * 做 5 遍历 `positions`。而快照表每天 +1 且**无任何裁剪**，于是在冷启动时
+ * 反复预计算「全部历史」（数年 = 数千份快照 × 每份数十条持仓）。
+ *
+ * 这里给它一个窗口，让**预计算**代价与使用年限脱钩。
+ *
+ * ⚠️ 这**不是**删除历史、也不是缩短可查询范围：
+ * - 数据仍完整保存在 IndexedDB 中（`snapshots` 一条不少）；
+ * - 历史页需要更早的点时，用 `repo.snapshots.range()` / `buildCompositionTrend`
+ *   自行按范围读取（`since` / `until` 参数已支持）；
+ * - 不降采样、不改历史语义。
+ */
+export const TREND_PRECOMPUTE_DAYS = 365
+
+/** 由「今天」推 N 天前的日期（本地日） */
+function daysAgoLocal(days: number, now: number): string {
+  const d = new Date(now)
+  d.setDate(d.getDate() - days)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
 export async function loadPortfolio2(
   repo: PortfolioRepository,
-  options: { now?: number } = {},
+  options: { now?: number; trendDays?: number } = {},
 ): Promise<Portfolio2Snapshot> {
   const now = options.now ?? Date.now()
   const portfolio = await repo.loadPortfolio()
@@ -69,13 +96,17 @@ export async function loadPortfolio2(
   const totals = calculateTotals({ portfolio, fx, now })
   const analysis = deriveAnalysis({ portfolio, results, totals, now })
 
+  const trendDays = options.trendDays ?? TREND_PRECOMPUTE_DAYS
   return {
     portfolio,
     totals,
     results,
     analysis,
     duplicates: detectDuplicateHoldings(portfolio),
-    trend: buildCompositionTrend(portfolio.snapshots),
+    // 只预计算最近 trendDays 天（数据仍在库里，不删除、不降采样）
+    trend: buildCompositionTrend(portfolio.snapshots, {
+      since: trendDays > 0 ? daysAgoLocal(trendDays, now) : undefined,
+    }),
     loadedAt: now,
   }
 }

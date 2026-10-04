@@ -1,6 +1,8 @@
-import { useMemo, useState } from 'react'
-import type { Portfolio2, Transaction, TransactionType } from '../types/portfolio2'
+import { useCallback, useMemo, useState } from 'react'
+import type { Portfolio2, Snapshot, Transaction, TransactionType } from '../types/portfolio2'
+import { positionBasisView, UNTRACEABLE } from '../lib/performance/basisView'
 import type { TrendSeries } from '../lib/performance/history'
+import { buildCompositionTrend } from '../lib/performance/history'
 import { ASSET_CLASS_LABEL } from '../lib/analysis/dimensions'
 import {
   queryTransactions,
@@ -51,6 +53,60 @@ export default function HistoryTab({ trend, portfolio, repo, onChanged }: Histor
   const [statusFilter, setStatusFilter] = useState<'all' | 'active'>('all')
   const [selected, setSelected] = useState<Transaction | null>(null)
 
+  /*
+   * 展开的「估值依据」快照日期（W9/P1-5）。
+   *
+   * 为什么按需读取而不是从 portfolio 拿：
+   * `portfolio` 刻意**不携带完整 snapshots**（W9/P1-1 的读路径纪律），
+   * 因此这里在用户展开时用 `repo.snapshots.byDate()` 只读那一份。
+   */
+  /*
+   * 扩展趋势范围（W9/P1-1）。
+   *
+   * 冷启动只**预计算**最近 365 天（数据仍全在 IndexedDB）。
+   * 用户需要看更早的历史时，按需从这里把完整历史读出来 ——
+   * 因此**可查询范围没有缩短**，只是把代价从「每次开 App」推迟到「用户主动要看」。
+   */
+  const [extendedTrend, setExtendedTrend] = useState<TrendSeries | null>(null)
+  const [extending, setExtending] = useState(false)
+
+  const loadEarlierHistory = useCallback(async () => {
+    setExtending(true)
+    try {
+      const all = await repo.snapshots.getAll()
+      setExtendedTrend(buildCompositionTrend(all))
+    } finally {
+      setExtending(false)
+    }
+  }, [repo])
+
+  const shownTrend = extendedTrend ?? trend
+
+  const [basisDate, setBasisDate] = useState<string | null>(null)
+  const [basisSnapshot, setBasisSnapshot] = useState<Snapshot | null>(null)
+  const [basisLoading, setBasisLoading] = useState(false)
+
+  const toggleBasis = useCallback(
+    async (date: string) => {
+      if (basisDate === date) {
+        setBasisDate(null)
+        setBasisSnapshot(null)
+        return
+      }
+      setBasisDate(date)
+      setBasisSnapshot(null)
+      setBasisLoading(true)
+      try {
+        const snap = await repo.snapshots.byDate(date)
+        // 只有仍然展开的是这一份时才写入（避免竞态覆盖）
+        setBasisSnapshot(snap ?? null)
+      } finally {
+        setBasisLoading(false)
+      }
+    },
+    [basisDate, repo],
+  )
+
   const accountById = useMemo(
     () => new Map(portfolio.accounts.map((a) => [a.id, a])),
     [portfolio.accounts],
@@ -75,7 +131,11 @@ export default function HistoryTab({ trend, portfolio, repo, onChanged }: Histor
   /** 每笔交易的 Ledger Effects（真实派生关系，供详情展示） */
   const entriesByTx = useMemo(() => {
     const ledger = deriveLedger(portfolio.transactions, {
-      instrumentCurrency: (id) => portfolio.instruments.find((i) => i.id === id)?.currency,
+      /*
+       * 复用上面已建好的 Map（W9/P2-2）。
+       * 原先每次调用都 `.find()` 扫一遍标的表 → O(T×I)。
+       */
+      instrumentCurrency: (id) => instrumentById.get(id)?.currency,
     })
     const m = new Map<string, typeof ledger.entries>()
     for (const e of ledger.entries) {
@@ -84,9 +144,9 @@ export default function HistoryTab({ trend, portfolio, repo, onChanged }: Histor
       m.set(e.transactionId, list)
     }
     return m
-  }, [portfolio.transactions, portfolio.instruments])
+  }, [portfolio.transactions, instrumentById])
 
-  const points = showAll ? trend.points : [...trend.points].reverse().slice(0, 12)
+  const points = showAll ? shownTrend.points : [...shownTrend.points].reverse().slice(0, 12)
 
   return (
     <div className="mx-auto w-full max-w-[480px] px-4">
@@ -94,7 +154,7 @@ export default function HistoryTab({ trend, portfolio, repo, onChanged }: Histor
         <h1 className="text-[15px] font-medium text-ink">资产历史</h1>
         <p className="mt-1 text-[11px] text-ink4" data-testid="tx-counts">
           {counts.posted} 笔有效
-          {counts.voided > 0 ? ` · ${counts.voided} 笔已作废` : ''} · {trend.points.length} 个快照
+          {counts.voided > 0 ? ` · ${counts.voided} 笔已作废` : ''} · {shownTrend.points.length} 个快照
         </p>
       </header>
 
@@ -252,19 +312,153 @@ export default function HistoryTab({ trend, portfolio, repo, onChanged }: Histor
                         历史分类数据不可用（当时未记录分类）
                       </p>
                     )}
+
+                    {/* ---- 估值依据（W9 / P1-5）---- */}
+                    <button
+                      type="button"
+                      onClick={() => void toggleBasis(pt.date)}
+                      data-testid="toggle-basis"
+                      data-date={pt.date}
+                      className="mt-2 w-full border-t border-line pt-2 text-left text-[11px] text-ink3"
+                    >
+                      {basisDate === pt.date ? '收起估值依据' : '查看估值依据'}
+                      <span className="ml-1 text-ink4">
+                        （这一段为什么是这个价值）
+                      </span>
+                    </button>
+
+                    {basisDate === pt.date ? (
+                      <div
+                        className="mt-2 space-y-2 rounded-xl border border-line bg-s2 p-2"
+                        data-testid="basis-panel"
+                      >
+                        {basisLoading ? (
+                          <p className="text-[11px] text-ink4">读取中…</p>
+                        ) : !basisSnapshot || basisSnapshot.positions.length === 0 ? (
+                          <p
+                            className="text-[11px] text-ink4"
+                            data-testid="basis-empty"
+                          >
+                            这份快照没有持仓明细（例如迁移来的月度点），因此**没有可追溯的估值依据**。
+                          </p>
+                        ) : (
+                          <>
+                            <p className="text-[10px] text-ink4">
+                              以下为**捕获当时**实际落盘的依据。显示「{UNTRACEABLE}」表示
+                              该字段在当年**没有记录**（V8 之前的快照不含这些字段），
+                              系统不会用今天的行情或分类去补它。
+                            </p>
+                            <ul className="space-y-2">
+                              {basisSnapshot.positions.map((pos, i) => {
+                                const v = positionBasisView(pos)
+                                return (
+                                  <li
+                                    key={`${pos.accountId}::${pos.instrumentId}::${i}`}
+                                    className="rounded-lg border border-line bg-s1 p-2"
+                                    data-testid="basis-position"
+                                  >
+                                    <div className="flex items-start justify-between gap-2">
+                                      <span className="min-w-0 flex-1 truncate text-[11px] text-ink">
+                                        {instrumentById.get(pos.instrumentId)?.name ?? pos.instrumentId}
+                                      </span>
+                                      <span className="shrink-0 text-[10px] text-ink4">
+                                        {v.reliable
+                                          ? '可靠估值'
+                                          : pos.quoteStatus === 'STALE'
+                                            ? '估值已过期'
+                                            : '无法估值'}
+                                      </span>
+                                    </div>
+                                    <dl className="mt-1 grid grid-cols-2 gap-x-2 gap-y-0.5 text-[10px]">
+                                      {v.fields.map((f) => (
+                                        <div key={f.label} className="flex justify-between gap-1">
+                                          <dt className="text-ink4">{f.label}</dt>
+                                          <dd
+                                            className={
+                                              f.missing
+                                                ? 'text-ink4'
+                                                : f.tone === 'warn'
+                                                  ? 'tone-warn'
+                                                  : 'text-ink2'
+                                            }
+                                            data-missing={f.missing ? '1' : '0'}
+                                          >
+                                            {f.value}
+                                          </dd>
+                                        </div>
+                                      ))}
+                                      <div className="flex justify-between gap-1">
+                                        <dt className="text-ink4">当时是否负债</dt>
+                                        <dd
+                                          className={v.liability === 'untraceable' ? 'text-ink4' : 'text-ink2'}
+                                          data-missing={v.liability === 'untraceable' ? '1' : '0'}
+                                        >
+                                          {v.liability === 'untraceable'
+                                            ? UNTRACEABLE
+                                            : v.liability
+                                              ? '负债'
+                                              : '资产'}
+                                        </dd>
+                                      </div>
+                                      <div className="flex justify-between gap-1">
+                                        <dt className="text-ink4">当时资产类别</dt>
+                                        <dd
+                                          className={
+                                            v.assetClassAtCapture === 'untraceable' ? 'text-ink4' : 'text-ink2'
+                                          }
+                                          data-missing={v.assetClassAtCapture === 'untraceable' ? '1' : '0'}
+                                        >
+                                          {v.assetClassAtCapture === 'untraceable'
+                                            ? UNTRACEABLE
+                                            : (ASSET_CLASS_LABEL[v.assetClassAtCapture] ??
+                                              v.assetClassAtCapture)}
+                                        </dd>
+                                      </div>
+                                    </dl>
+                                  </li>
+                                )
+                              })}
+                            </ul>
+                          </>
+                        )}
+                      </div>
+                    ) : null}
                   </li>
                 ))}
               </ul>
 
-              {trend.points.length > 12 ? (
+              {shownTrend.points.length > 12 ? (
                 <button
                   type="button"
                   onClick={() => setShowAll((v) => !v)}
                   className="mt-3 w-full rounded-xl border border-line bg-s1 py-2 text-[12px] text-ink2"
                 >
-                  {showAll ? '收起' : `显示全部 ${trend.points.length} 个时点`}
+                  {showAll ? '收起' : `显示全部 ${shownTrend.points.length} 个时点`}
                 </button>
               ) : null}
+
+              {/*
+                冷启动只预计算最近 365 天；更早的历史按需加载。
+                数据从未被删除 —— 这只是把读取代价推迟到用户真的要看的时候。
+              */}
+              {!extendedTrend ? (
+                <button
+                  type="button"
+                  onClick={() => void loadEarlierHistory()}
+                  disabled={extending}
+                  data-testid="load-earlier-history"
+                  className="mt-2 w-full rounded-xl border border-line bg-s1 py-2 text-[12px] text-ink3 disabled:opacity-50"
+                >
+                  {extending ? '读取中…' : '加载更早的历史（全部时点）'}
+                </button>
+              ) : (
+                <p
+                  className="mt-2 text-center text-[11px] text-ink4"
+                  data-testid="history-extended"
+                >
+                  已加载全部 {shownTrend.points.length} 个时点
+                </p>
+              )}
             </>
           )}
 

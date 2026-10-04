@@ -60,15 +60,34 @@ function safeNum(v: unknown): number {
 
 const round8 = (n: number) => Math.round(n * 1e8) / 1e8
 
-/** 交易按时间排序；同一时间的按「先设定的 adjustment」优先，保证期初先落地 */
+/**
+ * 交易按时间排序；同一时间的按「先设定的 adjustment」优先，保证期初先落地。
+ *
+ * ## 为什么预解析时间键（Phase 8 / W9，P2-1）
+ *
+ * 原实现在**比较器内部**调用 `new Date(a.timestamp).getTime()` ——
+ * 每次比较都要解析两个时间字符串。`Array.prototype.sort` 的比较次数是
+ * `O(T log T)`，于是解析次数也是 `O(T log T)`，且每次派生会排**两遍**
+ * （`derive.ts:215` 与 `:601`）、每写一笔交易触发 3 次派生。
+ *
+ * 现在先把时间解析成数字键（`O(T)` 次解析），再按数字比较。
+ *
+ * ⚠️ **排序语义完全不变**：
+ *   - 仍按时间升序；
+ *   - 时间相同时 `adjustment` 优先（rank 数值更小在前）；
+ *   - `Array.prototype.sort` 在 V8 中稳定，因此同 rank 的相对顺序不变。
+ *   - 时间字符串无法解析时原实现得 `NaN`，比较恒为 `false` → 元素位置
+ *     由稳定性决定；预解析后同样保留 `NaN`，`a - b` 仍为 `NaN` → 行为一致。
+ */
 export function sortTransactions(txs: Transaction[]): Transaction[] {
-  return [...txs].sort((a, b) => {
-    const ta = new Date(a.timestamp).getTime()
-    const tb = new Date(b.timestamp).getTime()
-    if (ta !== tb) return ta - tb
-    const rank = (t: Transaction) => (t.type === 'adjustment' ? 0 : 1)
-    return rank(a) - rank(b)
-  })
+  const rank = (t: Transaction) => (t.type === 'adjustment' ? 0 : 1)
+  return txs
+    .map((tx) => ({ tx, at: new Date(tx.timestamp).getTime(), rank: rank(tx) }))
+    .sort((a, b) => {
+      if (a.at !== b.at) return a.at - b.at
+      return a.rank - b.rank
+    })
+    .map((entry) => entry.tx)
 }
 
 /* ------------------------------------------------------------------ *

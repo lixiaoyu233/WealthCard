@@ -55,7 +55,7 @@ import type {
 import type { PortfolioRepository } from '../db/repository'
 import { type LedgerIssue, deriveLedger, positionKey } from '../ledger/derive'
 import { detectDuplicateHoldings } from '../ledger/duplicates'
-import { rebuildHoldingsFromTransactions } from '../ledger/rebuild'
+import { ledgerOptionsFor, rebuildHoldingsFromTransactions } from '../ledger/rebuild'
 import { reconcileHoldings } from '../ledger/reconcile'
 import { TRANSACTION_SEMANTICS } from '../ledger/types'
 import { isVoided, transactionStatus } from './lifecycle'
@@ -380,12 +380,13 @@ export async function recordTransaction(
   const tx = buildTransaction(resolved)
   const withTx: Portfolio2 = { ...portfolio, transactions: [...portfolio.transactions, tx] }
 
-  const instrumentCurrency = (id: string) =>
-    portfolio.instruments.find((i) => i.id === id)?.currency
-  const isConfirmedCash = (id: string) => {
-    const inst = portfolio.instruments.find((i) => i.id === id)
-    return !!inst && inst.instrumentType === 'cash' && inst.classificationStatus === 'confirmed'
-  }
+  /*
+   * 复用 `ledgerOptionsFor()`（其内部为 Map 查表）。
+   *
+   * 原先这里内联 `.find()` 闭包，会在 `deriveLedgerEffects` 里**逐笔交易**
+   * 被调用 → `O(T × I)`（W9/P2-2）。改为复用同一实现，语义完全一致。
+   */
+  const { instrumentCurrency, isConfirmedCash } = ledgerOptionsFor(portfolio)
 
   const trial = deriveLedger(withTx.transactions, { instrumentCurrency, isConfirmedCash })
 
@@ -558,12 +559,13 @@ export async function voidTransaction(
   }
 
   /* ---- 5) 内存试算 ---- */
-  const instrumentCurrency = (id: string) =>
-    portfolio.instruments.find((i) => i.id === id)?.currency
-  const isConfirmedCash = (id: string) => {
-    const inst = portfolio.instruments.find((i) => i.id === id)
-    return !!inst && inst.instrumentType === 'cash' && inst.classificationStatus === 'confirmed'
-  }
+  /*
+   * 复用 `ledgerOptionsFor()`（其内部为 Map 查表）。
+   *
+   * 原先这里内联 `.find()` 闭包，会在 `deriveLedgerEffects` 里**逐笔交易**
+   * 被调用 → `O(T × I)`（W9/P2-2）。改为复用同一实现，语义完全一致。
+   */
+  const { instrumentCurrency, isConfirmedCash } = ledgerOptionsFor(portfolio)
 
   const trial = deriveLedger(withVoid.transactions, { instrumentCurrency, isConfirmedCash })
 
@@ -821,8 +823,7 @@ export interface AvailablePosition {
  * 卖出表单用这个结果限制可卖数量，避免提交后才被拒绝。
  */
 export function availablePositions(portfolio: Portfolio2): AvailablePosition[] {
-  const instrumentCurrency = (id: string) =>
-    portfolio.instruments.find((i) => i.id === id)?.currency
+  const { instrumentCurrency } = ledgerOptionsFor(portfolio)
   const ledger = deriveLedger(portfolio.transactions, { instrumentCurrency })
 
   const out: AvailablePosition[] = []
@@ -846,8 +847,7 @@ export function availableQuantity(
   accountId: string,
   instrumentId: string,
 ): number {
-  const instrumentCurrency = (id: string) =>
-    portfolio.instruments.find((i) => i.id === id)?.currency
+  const { instrumentCurrency } = ledgerOptionsFor(portfolio)
   const ledger = deriveLedger(portfolio.transactions, { instrumentCurrency })
   return ledger.positions.get(positionKey(accountId, instrumentId))?.quantity ?? 0
 }
@@ -876,8 +876,7 @@ export function availableQuantities(
   portfolio: Portfolio2,
   accountId: string,
 ): Map<string, number> {
-  const instrumentCurrency = (id: string) =>
-    portfolio.instruments.find((i) => i.id === id)?.currency
+  const { instrumentCurrency } = ledgerOptionsFor(portfolio)
   const ledger = deriveLedger(portfolio.transactions, { instrumentCurrency })
 
   const out = new Map<string, number>()

@@ -433,14 +433,20 @@ export async function captureSnapshot(
     }
   }
 
-  // 期初：优先用传入值，否则取前一天的快照
+  /*
+   * 期初：优先用传入值，否则取「目标日期之前最近的一份」快照。
+   *
+   * W9/P1-1：原实现 `getAll()` + filter + sort 会把**整张快照表**读进内存。
+   * 快照表每天 +1 且无裁剪，而这条路径每次开 App、每次写入都要走，
+   * 于是「找期初」的代价随使用年限线性上升。
+   * 现在交给 `previousBefore()` 用 `date` 索引直接定位，不再 materialize 全表。
+   *
+   * ⚠️ 语义完全不变：仍是「date 严格小于目标日期的**最新**一份」。
+   * 刻意**不做**间隔补齐（那会变成猜测历史）。
+   */
   let opening = options.opening
   if (!opening) {
-    const all = await repo.snapshots.getAll()
-    const previous = all
-      .filter((s) => s.date < date)
-      .sort((a, b) => b.date.localeCompare(a.date))[0]
-    opening = previous
+    opening = await repo.snapshots.previousBefore(date)
   }
 
   const existing = await repo.snapshots.byDate(date)

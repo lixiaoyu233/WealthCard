@@ -212,7 +212,23 @@ function valuateHoldingInner(
       reasons.push('missing_value')
     }
   } else {
-    const quote = latestQuoteFor(portfolio.quotes, holding.instrumentId)
+    /*
+     * ## as-of 接线（Phase 8 / W9，P1-2）
+     *
+     * `latestQuoteFor` 的 `asOf` 形参在 W8 就已定义（契约是
+     * 「只取 timestamp <= 该时点 的最新行情」），但**调用点没有传**，
+     * 于是它一直退化为「取全局最新」—— 一份**未来日期**的行情会
+     * 被今天的估值/快照采用，W8 写下的契约实际不存在。
+     *
+     * 这里传入本次估值的时点 `now`：
+     * - 实时估值：`now` = 当前时刻 → 只取「此刻已存在」的行情；
+     * - 快照捕获：`now` = 捕获时刻 → 只取「捕获时已存在」的行情。
+     *
+     * ⚠️ 必须与 `judgeQuote` 用**同一个** `now`，
+     * 否则「取到的行情」与「判定其是否过期」会基于不同时点。
+     */
+    const asOfIso = new Date(now).toISOString()
+    const quote = latestQuoteFor(portfolio.quotes, holding.instrumentId, asOfIso)
     const judged = judgeQuote(quote, now, policy)
     // 无论可用与否都先记下依据（供快照落盘），取不到则为 undefined
     basisQuote = quote

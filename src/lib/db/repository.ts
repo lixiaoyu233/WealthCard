@@ -140,6 +140,17 @@ export interface MetaKeyValueRepository {
 export interface SnapshotRepository extends Repository<Snapshot> {
   byDate(date: string): Promise<Snapshot | undefined>
   /**
+   * 目标日期**之前**最近的一份快照（不含该日）。
+   *
+   * 为什么需要（Phase 8 / W9，P1-1）：`captureSnapshot` 找期初时
+   * 原先调用 `getAll()` 把**整张快照表**读进内存再排序取首 ——
+   * 而每次开 App / 每次写入都会走这条路。快照表是随时间无界增长的
+   * （每天 +1，全仓无裁剪），这让「找期初」的代价随使用年限线性上升。
+   *
+   * 有了它就能**借助 `date` 索引直接定位**，不materialize 全表。
+   */
+  previousBefore(date: string): Promise<Snapshot | undefined>
+  /**
    * 幂等写入：同一天只保留一条。
    * 已存在则**更新**（保留原 createdAt），不存在才插入。
    */

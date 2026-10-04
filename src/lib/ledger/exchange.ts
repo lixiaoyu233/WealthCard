@@ -23,6 +23,7 @@
  */
 
 import type { Portfolio2, Transaction } from '../../types/portfolio2'
+import { activeTransactions } from './lifecycle'
 
 const round8 = (n: number) => Math.round(n * 1e8) / 1e8
 
@@ -179,11 +180,23 @@ export function validateExchange(tx: Transaction, portfolio: Portfolio2): Exchan
   }
 }
 
-/** 批量校验：只返回有问题的换汇，供导入检查使用 */
+/**
+ * 批量校验：只返回**仍然有效**的问题换汇。
+ *
+ * ## 为什么必须过滤已作废（Phase 8 / W9，P1-4）
+ *
+ * 原先这里直接遍历 `portfolio.transactions`，把 **VOIDED** 的换汇也算进来。
+ * 后果：用户作废了一笔曾无效的换汇后，**换汇表单依然提示「有 N 笔无效换汇」
+ * 并阻止提交** —— 一条已经没有账本效果的历史记录挡住了有效操作。
+ *
+ * 作废的语义是「这笔交易不生效」（W5 已确定），因此校验也必须只看有效交易。
+ * 保留 `findInvalidExchanges` 这个「不含已作废」的口径与
+ * `deriveLedgerEffects`（`derive.ts:215` 经 `activeTransactions` 过滤）保持一致。
+ */
 export function findInvalidExchanges(
   portfolio: Portfolio2,
 ): Array<{ transactionId: string; validation: ExchangeValidation }> {
-  return portfolio.transactions
+  return activeTransactions(portfolio.transactions)
     .filter((t) => t.type === 'exchange')
     .map((t) => ({ transactionId: t.id, validation: validateExchange(t, portfolio) }))
     .filter((x) => !x.validation.ok)

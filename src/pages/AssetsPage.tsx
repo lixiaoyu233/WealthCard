@@ -5,6 +5,7 @@ import type { AnalysisView } from '../lib/analysis'
 import type { ValuationResult } from '../lib/valuation/types'
 import type { PortfolioRepository } from '../lib/db/repository'
 import { detectDuplicateHoldings } from '../lib/ledger/duplicates'
+import { findLiabilityConflicts } from '../lib/portfolio/liability'
 import {
   quoteOf,
   reasonLabelsOf,
@@ -113,6 +114,19 @@ export default function AssetsPage({
   const [quoteFor, setQuoteFor] = useState<string | undefined>(undefined)
   const [accountOpen, setAccountOpen] = useState(false)
   const [instrumentOpen, setInstrumentOpen] = useState(false)
+
+  /**
+   * 负债判定冲突（W9 / P1-3）。
+   *
+   * W8 已确定「两者都认」的保守口径：账户 `isLiability` 与标的
+   * `assetClass` 冲突时按**负债**计（宁可少算净资产，也不虚高），
+   * 并产出 `conflict` 标记。但该标记此前**没有任何 UI 消费** ——
+   * 用户拿到正确的数字，却不知道自己有一处设置错了。
+   *
+   * ⚠️ 这里**只提示、不修改**：不自动替用户改分类，
+   * 也不会改变 W8 已确定的计算口径。
+   */
+  const liabilityConflicts = useMemo(() => findLiabilityConflicts(portfolio), [portfolio])
   const [manualOpen, setManualOpen] = useState(false)
 
   const coldStart = useMemo(() => coldStartStateOf(portfolio), [portfolio])
@@ -233,6 +247,56 @@ export default function AssetsPage({
             <span className="ml-1.5 text-ink4">{cashCandidates} 项可转换</span>
           </span>
         </button>
+
+        {/*
+          负债判定冲突提示（W9 / P1-3）。
+          只展示「需要核实」，并提供到账户/标的编辑的入口 —— 由用户自己决定改哪一处。
+        */}
+        {liabilityConflicts.length > 0 ? (
+          <div
+            className="rounded-2xl border border-warn/25 bg-warn/10 px-3.5 py-2.5 text-[12px] tone-warn"
+            data-testid="liability-conflict"
+          >
+            <div className="flex items-center gap-2">
+              <AlertTriangle size={14} className="shrink-0" />
+              <span className="flex-1 font-medium">
+                有 {liabilityConflicts.length} 项负债判定需要核实
+              </span>
+            </div>
+            <ul className="mt-1.5 space-y-1 text-[11px] leading-relaxed">
+              {liabilityConflicts.slice(0, 3).map((c) => (
+                <li key={c.holdingId} data-testid="liability-conflict-item">
+                  · {c.detail}
+                </li>
+              ))}
+              {liabilityConflicts.length > 3 ? (
+                <li className="text-ink4">· 另有 {liabilityConflicts.length - 3} 项</li>
+              ) : null}
+            </ul>
+            <p className="mt-1.5 text-[10px] text-ink4">
+              当前按**负债**计入（更保守，净资产不会虚高）。请核实是账户还是标的设置需要修正 ——
+              系统不会替你改动。
+            </p>
+            <div className="mt-2 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setAccountOpen(true)}
+                className="rounded-lg border border-warn/30 bg-s1 px-2.5 py-1 text-[11px] text-ink2"
+                data-testid="liability-conflict-account"
+              >
+                检查账户
+              </button>
+              <button
+                type="button"
+                onClick={() => setInstrumentOpen(true)}
+                className="rounded-lg border border-warn/30 bg-s1 px-2.5 py-1 text-[11px] text-ink2"
+                data-testid="liability-conflict-instrument"
+              >
+                检查标的
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         {!duplicates.ok ? (
           <button

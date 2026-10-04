@@ -26,6 +26,7 @@
 
 import type { Holding, Instrument, Portfolio2, Transaction } from '../../types/portfolio2'
 import { positionKey } from './derive'
+import { activeTransactions } from './lifecycle'
 
 export interface CashConversionAction {
   holdingId: string
@@ -95,9 +96,17 @@ export function convertConfirmedCashHoldings(
 ): CashConversionResult {
   const timestamp = options.timestamp ?? iso()
 
-  // 已有的期初交易（用于幂等判断）
+  /*
+   * 已有的期初交易（用于幂等判断）。
+   *
+   * ⚠️ 必须排除**已作废**的 adjustment（Phase 8 / W9，P1-4）：
+   * 否则一笔被作废的转换会被当成「已经转换过」，导致幂等判断认为
+   * 无需再转换 —— 用户作废转换后重新执行却发现什么都没发生。
+   *
+   * 作废的语义是「这笔交易不生效」（W5），因此幂等判断只能看有效交易。
+   */
   const adjustmentKeys = new Set(
-    portfolio.transactions
+    activeTransactions(portfolio.transactions)
       .filter((t) => t.type === 'adjustment' && !!t.instrumentId)
       .map((t) => positionKey(t.accountId, t.instrumentId as string)),
   )

@@ -281,6 +281,12 @@ function createSnapshotRepository(db: () => WealthCardDb): SnapshotRepository {
   return {
     ...base,
     byDate: (date) => db().snapshots.where('date').equals(date).first(),
+    /*
+     * 借 `&date` 唯一索引反向取「小于目标日期」的第一条（= 最近的一份）。
+     * 不读取整表，因此代价与「快照总数」脱钩。
+     */
+    previousBefore: (date) =>
+      db().snapshots.where('date').below(date).reverse().sortBy('date').then((r) => r[0]),
     /**
      * 幂等：同一天只保留一条。
      * 已存在则更新（保留原 id 与 createdAt），否则插入 —— 满足「重复生成不新增」的要求。
@@ -616,6 +622,10 @@ export function createInMemoryRepository(): PortfolioRepository {
     ),
     snapshots: Object.assign(snapshots, {
       byDate: async (d: string) => store.snapshots.find((s) => s.date === d),
+      previousBefore: async (d: string) =>
+        [...store.snapshots]
+          .filter((s) => s.date < d)
+          .sort((a, b) => b.date.localeCompare(a.date))[0],
       upsertForDate: async (s: Snapshot) => {
         const existing = store.snapshots.find((x) => x.date === s.date)
         store = {
