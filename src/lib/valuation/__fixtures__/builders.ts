@@ -21,6 +21,35 @@ import type {
 export const ISO = '2026-10-03T10:00:00.000Z'
 export const NOW = new Date(ISO).getTime()
 
+/**
+ * 由「本地日」求一个落在**同一天**的时间戳（本地中午）。
+ *
+ * ## 为什么需要（Phase 8 / W8）
+ *
+ * `captureSnapshot` 现在有日期守卫：只允许创建**本地今天**的快照
+ * （过去/未来都会抛错，因为估值没有 as-of 能力）。
+ *
+ * 而测试常写 `{ date: '2026-10-03', now: NOW }` —— 若 `NOW` 解析出的
+ * 本地日与 `date` 不同，守卫就会（正确地）拒绝。这**不是**守卫的 bug，
+ * 而是测试的时钟与它声称的日期不一致。
+ *
+ * 用这个辅助函数即可让两者一致，从而在**尊重守卫**的前提下
+ * 测试「同一天幂等 / 刷新」等行为。
+ *
+ * ⚠️ 它**不能**用来测试「为过去日期创建快照」—— 那正是守卫要拦的行为，
+ * 该类场景必须改为直接写入仓储（模拟「当时已存在的历史」）。
+ */
+export function nowForLocalDate(date: string): number {
+  return new Date(`${date}T12:00:00`).getTime()
+}
+
+/** 本地今天（与 `snapshot.localDate()` 同口径） */
+export function todayLocal(): string {
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
 let seq = 0
 const nextId = (prefix: string) => `${prefix}_${++seq}`
 

@@ -63,6 +63,11 @@ export default function FxSheet({ open, onClose, portfolio, repo, onChanged }: F
     return r
   }, [portfolio.fxRates, currency])
 
+  /** 该币种对已有多少条历史汇率（W8 起按时间点累积，不再覆盖） */
+  const historyCount = portfolio.fxRates.filter(
+    (r) => r.baseCurrency === currency && r.quoteCurrency === 'CNY',
+  ).length
+
   const submit = async () => {
     setBusy(true)
     setError(null)
@@ -191,7 +196,12 @@ export default function FxSheet({ open, onClose, portfolio, repo, onChanged }: F
 
         <p className="rounded-xl border border-line bg-s2 px-3 py-2 text-[11px] leading-relaxed text-ink4">
           手填汇率记为 <span className="text-ink3">手动</span> 状态（不因时间失效）并注明来源{' '}
-          <span className="text-ink3">manual</span>。 同一币种对同来源会**覆盖**写入，不会无限增长。
+          <span className="text-ink3">manual</span>。
+          <br />
+          <span className="text-ink3">
+            不同时间点的汇率会**各自保留**（当前已记录 {historyCount} 条），
+            历史快照因此仍能解释「当时按什么汇率折算」。
+          </span>
         </p>
       </div>
 

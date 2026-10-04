@@ -154,12 +154,46 @@ function priceFieldsFor(priceKind: PriceKind, price: number) {
   }
 }
 
-/** 找到该标的当前生效的行情 id（同一标的 + 同一 priceKind 视为同一来源） */
-function existingQuoteId(portfolio: Portfolio2, instrumentId: string, priceKind: PriceKind): string | undefined {
-  const same = portfolio.quotes
-    .filter((q) => q.instrumentId === instrumentId && q.priceKind === priceKind)
-    .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
-  return same[0]?.id
+/**
+ * 业务键：同一标的 + 同一价格类型 + 同一来源 + **同一时间点**。
+ *
+ * ## 为什么按这个键去重（Phase 8 / W8，P0-3）
+ *
+ * W6 起实现是「同一 (instrumentId, priceKind) 就复用同一行 id → 覆盖」。
+ * 后果：**历史行情永久消失**，只留最后一次录入值 ——
+ * 快照里的数字因此「有值但无法自证」。
+ *
+ * W8 改为**按业务键去重**：
+ * - 同一时间点的同一笔录入 → 覆盖（防止重复点击堆积、便于更正输入错误）；
+ * - **不同时间点** → 各自保留一行（历史行情可追溯）。
+ *
+ * 这正是「行情是多时间点的事实」这一语义的正确表达。
+ */
+function quoteBusinessKey(q: {
+  instrumentId: string
+  priceKind: PriceKind
+  source: string
+  timestamp: string
+}): string {
+  return `${q.instrumentId}|${q.priceKind}|${q.source}|${q.timestamp}`
+}
+
+/** 找到业务键相同的既有行情 id（无则 undefined → 追加新行） */
+function existingQuoteIdFor(
+  portfolio: Portfolio2,
+  key: string,
+): string | undefined {
+  return portfolio.quotes.find((q) => quoteBusinessKey(q) === key)?.id
+}
+
+/** 汇率业务键：币种对 + 来源 + 时间点 */
+function fxBusinessKey(r: {
+  baseCurrency: string
+  quoteCurrency: string
+  source: string
+  timestamp: string
+}): string {
+  return `${r.baseCurrency}|${r.quoteCurrency}|${r.source}|${r.timestamp}`
 }
 
 /* ------------------------------------------------------------------ *
@@ -210,7 +244,17 @@ export async function upsertQuote(
    */
   const source = input.source?.trim() || 'manual'
 
-  const id = input.id ?? existingQuoteId(portfolio, input.instrumentId, priceKind) ?? nextId('q', input.timestamp)
+  /*
+   * 业务键去重：同一 (标的, priceKind, source, 时间点) 视为同一条事实。
+   * 不同时间点各自成行 —— 历史行情因此可保留、可追溯。
+   */
+  const businessKey = quoteBusinessKey({
+    instrumentId: input.instrumentId,
+    priceKind,
+    source,
+    timestamp: input.timestamp,
+  })
+  const id = input.id ?? existingQuoteIdFor(portfolio, businessKey) ?? nextId('q', input.timestamp)
 
   const quote: Quote = {
     id,
@@ -301,8 +345,16 @@ export function currencyOptions(): readonly CurrencyCode[] {
 /**
  * 录入 / 更新一条汇率。
  *
- * - 同一币种对同来源 → **覆盖**（复用既有 `upsertLatest`，避免无限增长）
- * - 写入前用新汇率**试算**，确认原先缺 FX 的持仓现在能正确折算
+ * ## 语义（Phase 8 / W8，P0-3）
+ *
+ * 与行情同理：汇率是**多时间点的事实**，因此按
+ * `(base, quote, source, timestamp)` 业务键去重 ——
+ * 同一时间点覆盖（防重复点击），不同时间点各保留一行。
+ *
+ * ⚠️ 不再使用 `upsertLatest`：它会**删除**该币种对同来源的历史汇率，
+ * 导致「当时的汇率」永久不可追溯（W8 审计的 P0-3）。
+ *
+ * 写入前用新汇率**试算**，确认原先缺 FX 的持仓现在能正确折算。
  */
 export async function upsertFxRate(
   repo: PortfolioRepository,
@@ -370,8 +422,10 @@ export async function upsertFxRate(
     (h) => withRate.instruments.find((i) => i.id === h.instrumentId)?.currency === input.baseCurrency,
   ).length
 
-  /* ---- ⑤ 写入（同一币种对同来源覆盖） ---- */
-  await repo.fxRates.upsertLatest(rate)
+  /* ---- ⑤ 写入：业务键去重追加（保留历史汇率） ---- */
+  const key = fxBusinessKey(rate)
+  const existing = portfolio.fxRates.find((r) => fxBusinessKey(r) === key)
+  await repo.fxRates.put(existing ? { ...rate, id: existing.id } : rate)
 
   return { ok: true, rate, affectedHoldingCount: affected }
 }

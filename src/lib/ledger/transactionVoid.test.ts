@@ -15,13 +15,13 @@ import { rebuildHoldingsFromTransactions } from './rebuild'
 import { reconcileHoldings } from './reconcile'
 import { detectDuplicateHoldings } from './duplicates'
 import { classifyPortfolioFlows } from '../performance/cashflow'
-import { captureSnapshot, localDate } from '../performance/snapshot'
+import { buildSnapshot, captureSnapshot, localDate, previousDate } from '../performance/snapshot'
 import { ensureDailySnapshot } from '../performance/dailySnapshot'
 import { calculateTotals } from '../valuation/engine'
 import { createFxTable } from '../valuation/fx'
 import { migrateV5ToV6 } from '../db/migrations/schema-v5-to-v6'
 import { resetReadOnlyMode } from '../readOnly'
-import { makeAccount, makeInstrument, makePortfolio } from '../valuation/__fixtures__/builders'
+import { makeAccount, makeInstrument, makePortfolio, nowForLocalDate } from '../valuation/__fixtures__/builders'
 
 /*
  * Phase 8 / W5 — 交易作废（Void）测试
@@ -606,54 +606,51 @@ describe('Snapshot：已作废交易不进入当日现金流归因', () => {
     const repo = await seedRepo()
 
     /*
-     * 先建立 opening 快照（10-03）。
-     * `attribute()` 没有 opening 时归因状态是 `unavailable`，
-     * `externalInflow` 会是 undefined —— 那样的断言毫无意义。
+     * 历史 opening 快照**直接写入仓储**（W8 起不能为过去日期调用
+     * `captureSnapshot` —— 那会产出伪造历史）。
+     * 这恰好模拟真实情形：它本来就是当时捕获的。
      */
-    const opening = await captureSnapshot(repo, { date: '2026-10-03', now: NOW().getTime() })
-    expect(opening.action).toBe('created')
+    const today = localDate()
+    const yesterday = previousDate(today)
+    await repo.snapshots.put(
+      buildSnapshot(await repo.loadPortfolio(), { date: yesterday, now: nowForLocalDate(yesterday) }).snapshot,
+    )
 
-    const id = await record(repo, { type: 'deposit', amount: 5000, timestamp: '2026-10-04T10:00:00.000Z' })
+    const id = await record(repo, { type: 'deposit', amount: 5000, timestamp: `${today}T10:00:00.000Z` })
 
-    const withDeposit = await captureSnapshot(repo, { date: '2026-10-04', now: NOW().getTime() })
+    const withDeposit = await captureSnapshot(repo, { date: today, now: Date.now() })
     expect(withDeposit.snapshot.attributionStatus).not.toBe('unavailable')
     expect(withDeposit.snapshot.externalInflow).toBe(5000)
 
     await voidTransaction(repo, id, { now: NOW })
 
-    /*
-     * 10-04 的快照已存在 → **保留为「当时的事实」**，不因作废而改变。
-     *
-     * 这里断言的是生产路径的不变量：`ensureDailySnapshot`（唯一的自动入口）
-     * 在快照已存在时**直接返回既有快照、不做更新**。
-     * 因此作废**不会回溯改写历史快照**。
-     */
-    const sameDayAfterVoid = await captureSnapshot(repo, { date: '2026-10-04', now: NOW().getTime() })
-    expect(sameDayAfterVoid.action).toBe('updated') // captureSnapshot 会重算
-    const stored = await repo.snapshots.byDate('2026-10-04')
-    expect(stored!.externalInflow).toBe(sameDayAfterVoid.snapshot.externalInflow)
+    const storedBefore = await repo.snapshots.byDate(today)
+    expect(storedBefore!.externalInflow).toBe(5000)
 
     /*
-     * 【核心】一致性体现在**作废后新生成**的快照上：
-     * 现金流归因不再包含已作废交易（与 Ledger 一致）。
+     * 【核心】作废后**新生成**的快照不再把已作废交易算进现金流
+     * （与 Ledger 的过滤保持一致）。
      *
      * 若这一条不成立，说明 `captureSnapshot` 的独立交易路径没跟上
      * `deriveLedger` 的过滤 —— 正是 W5 审计发现的第二个缺口。
      */
-    const nextDay = await captureSnapshot(repo, { date: '2026-10-05', now: NOW().getTime() })
-    expect(nextDay.snapshot.attributionStatus).not.toBe('unavailable')
-    expect(nextDay.snapshot.externalInflow).toBe(0)
+    const afterVoid = await captureSnapshot(repo, { date: today, now: Date.now() })
+    expect(afterVoid.snapshot.externalInflow).toBe(0)
   })
 
   it('【不变量】ensureDailySnapshot 不会改写已存在的历史快照', async () => {
     const repo = await seedRepo()
     const id = await record(repo, { type: 'deposit', amount: 5000, timestamp: '2026-10-02T10:00:00.000Z' })
 
-    // 建立 10-02 快照
-    await captureSnapshot(repo, { date: '2026-10-01', now: NOW().getTime() })
-    const first = await captureSnapshot(repo, { date: '2026-10-02', now: NOW().getTime() })
-    expect(first.snapshot.externalInflow).toBe(5000)
-    const frozenId = first.snapshot.id
+    /*
+     * 建立一份**历史**快照（W8 起改为直接写入仓储，因为不能为过去日期捕获）。
+     * 它代表「当时已经记下的历史事实」。
+     */
+    const pastDate = previousDate(localDate())
+    const past = buildSnapshot(await repo.loadPortfolio(), { date: pastDate, now: nowForLocalDate(pastDate) }).snapshot
+    await repo.snapshots.put(past)
+    const frozen = JSON.stringify(past)
+    const frozenId = past.id
 
     // 作废该笔交易
     await voidTransaction(repo, id, { now: NOW })
@@ -665,12 +662,13 @@ describe('Snapshot：已作废交易不进入当日现金流归因', () => {
      *
      * 2026-10-02 相对 NOW()=2026-10-04 是**历史**，因此必须原样保留。
      */
-    const again = await ensureDailySnapshot(repo, { date: '2026-10-02', now: NOW().getTime() })
+    const again = await ensureDailySnapshot(repo, { date: pastDate, now: nowForLocalDate(pastDate) })
     expect(again.action).toBe('already-captured')
     if (again.action === 'already-captured') {
       expect(again.snapshot.id).toBe(frozenId)
-      expect(again.snapshot.externalInflow).toBe(5000) // 历史快照未被回溯修改
     }
+    // 【核心】历史快照**逐字节**未被回溯修改（含作废后也不重算）
+    expect(JSON.stringify(await repo.snapshots.byDate(pastDate))).toBe(frozen)
   })
 
   it('【W7】当天快照会被刷新，但仍保留同一条记录（不新增）', async () => {

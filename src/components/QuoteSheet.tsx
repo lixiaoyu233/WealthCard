@@ -70,6 +70,10 @@ export default function QuoteSheet({
   const [instrumentId, setInstrumentId] = useState(initialInstrumentId ?? candidates[0]?.id ?? '')
   const instrument = portfolio.instruments.find((i) => i.id === instrumentId)
   const existing = instrument ? quoteOf(portfolio, instrument.id) : undefined
+  /** 该标的历史行情条数（W8 起按时间点累积，不再覆盖） */
+  const historyCount = instrument
+    ? portfolio.quotes.filter((q) => q.instrumentId === instrument.id).length
+    : 0
 
   const [priceKind, setPriceKind] = useState<PriceKind>(existing?.priceKind ?? 'market_price')
   const [price, setPrice] = useState(
@@ -237,6 +241,11 @@ export default function QuoteSheet({
             手填价格会记为 <span className="text-ink3">手动</span> 状态并注明来源为
             <span className="text-ink3"> manual</span>，不会伪装成外部行情。
             行情过期后不会再计入可靠总资产。
+            <br />
+            <span className="text-ink3">
+              不同时间点的行情会**各自保留**（当前已记录 {historyCount} 条），
+              因此历史快照仍能解释「当时为什么是这个价值」。
+            </span>
           </p>
         </div>
       )}

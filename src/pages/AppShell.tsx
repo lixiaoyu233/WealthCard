@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Home, Layers, PieChart, Plus, TrendingUp, Settings as SettingsIcon } from 'lucide-react'
 import { useMemo } from 'react'
 import { usePortfolio2 } from '../hooks/usePortfolio2'
+import { ensureDailySnapshot } from '../lib/performance/dailySnapshot'
 import { createDexieRepository } from '../lib/db/dexieRepository'
 import type { PortfolioRepository } from '../lib/db/repository'
 import HomePage from './HomePage'
@@ -95,14 +96,36 @@ export default function AppShell({
   }, [tab])
 
   /**
-   * 业务操作完成后重新派生。
+   * 业务操作完成后重新派生 + **刷新当日快照**。
    *
-   * 关键：**任何** 写入都必须走这里刷新，而不是在组件内直接改派生结果 ——
-   * 派生结果（AnalysisView / totals / trend）一律由 Repository 重新读取后重算。
+   * ## 关键：写入后必须刷新派生结果
+   *
+   * 派生结果（AnalysisView / totals / trend）一律由 Repository 重新读取后重算，
+   * 绝不在组件内直接改。
+   *
+   * ## 为什么还要刷新当日快照（Phase 8 / W8 修复）
+   *
+   * `ensureDailySnapshot` 原先只在 `usePortfolio2` 的**挂载 effect** 里调用一次。
+   * 于是「首次打开应用（数据还是空的）→ 建立账户/持仓」这条最常见的路径会
+   * 把**空的当日快照**冻结一整天：当天快照永久为 0，而首页仍显示
+   * 「今日快照：已生成」。
+   *
+   * 现在每次业务写入后重新 `ensureDailySnapshot`：
+   * - 目标日期是今天 → 允许刷新（同日 upsert，保留 id/createdAt）；
+   * - **历史快照永不触碰**（守卫在 `ensureDailySnapshot` 与 `captureSnapshot` 内）。
+   *
+   * 这样「今天」的快照始终反映今天的最新事实，而历史保持不可变。
    */
   const handleChanged = useCallback(() => {
-    void reload()
-  }, [reload])
+    void (async () => {
+      try {
+        await ensureDailySnapshot(activeRepo)
+      } catch {
+        // 快照失败不阻断业务刷新
+      }
+      await reload()
+    })()
+  }, [reload, activeRepo])
 
   return (
     <div className="min-h-screen bg-app">

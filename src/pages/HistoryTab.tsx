@@ -210,24 +210,35 @@ export default function HistoryTab({ trend, portfolio, repo, onChanged }: Histor
                           {cny(pt.netWorth)}
                         </p>
                         <p className="text-[10px] text-ink4">净资产</p>
+                        {pt.totalLiabilities !== undefined && pt.totalLiabilities > 0 ? (
+                          <p className="mt-0.5 text-[10px] text-ink4" data-testid="history-liability">
+                            资产 {cny(pt.grossAssets ?? 0)} · 负债 {cny(pt.totalLiabilities)}
+                          </p>
+                        ) : null}
                       </div>
                     </div>
 
                     {pt.hasClassification && pt.byClass ? (
                       <ul className="mt-2 space-y-0.5 border-t border-line pt-2 text-[11px]">
+                        {/*
+                          资产类别构成（W8）。
+                          负债单独成行、不参与资产占比分母 —— 占比分母是 grossAssets。
+                        */}
                         {Object.entries(pt.byClass)
                           .sort((a, b) => b[1] - a[1])
                           .map(([cls, v]) => (
                             <li key={cls} className="flex justify-between">
-                              <span className="text-ink3">
+                              <span className={cls === 'liability' ? 'tone-warn' : 'text-ink3'}>
                                 {ASSET_CLASS_LABEL[cls as keyof typeof ASSET_CLASS_LABEL] ?? cls}
                               </span>
                               <span className="text-ink2">
                                 {cny(v)}
                                 <span className="ml-1.5 text-ink4">
-                                  {pt.byClassShare?.[cls] !== undefined
-                                    ? `${((pt.byClassShare[cls] ?? 0) * 100).toFixed(0)}%`
-                                    : ''}
+                                  {cls === 'liability'
+                                    ? '（不计入资产占比）'
+                                    : pt.byClassShare?.[cls] !== undefined
+                                      ? `${((pt.byClassShare[cls] ?? 0) * 100).toFixed(0)}%`
+                                      : ''}
                                 </span>
                               </span>
                             </li>

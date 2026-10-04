@@ -147,8 +147,13 @@ export function buildSnapshot(
     if (r.status === 'stale') staleCount += 1
 
     if (reliable && r.value !== undefined) {
-      // eslint-disable-next-line no-lonely-if
-      if (r.assetClass === 'liability') {
+      /*
+       * 负债判定**只读估值结果**（W8 统一口径）。
+       *
+       * 原先这里写 `r.assetClass === 'liability'`，同样忽略账户的 isLiability，
+       * 导致「负债账户下的持仓」被算进总资产 —— 净资产虚高。
+       */
+      if (r.isLiability) {
         totalLiabilities += Math.abs(r.value)
       } else {
         totalAssets += r.value
@@ -170,6 +175,47 @@ export function buildSnapshot(
     const classAtCapture =
       instrument && instrument.classificationStatus === 'confirmed' ? instrument.assetClass : undefined
 
+    /*
+     * 记录**捕获当时**的负债判定（W8）。
+     *
+     * 与 `assetClassAtCapture` 同理：负债判定依赖账户与标的的当前状态，
+     * 事后用今天的状态回溯会重画历史。因此把结论固化进快照，
+     * 让「历史资产占比」能够按 gross assets 正确切分。
+     */
+    const isLiabilityAtCapture = r.isLiability
+
+    /*
+     * ---- 估值依据（Schema V8 / W8）----
+     *
+     * 记录**当时实际用到**的依据，让历史快照能够自证：
+     * 「这一天这个价，来自哪个来源、什么类型、哪一刻、什么状态」。
+     *
+     * 原则：
+     * - 只记录**真实存在**的依据；取不到就留 `undefined`（`UNKNOWN`），
+     *   **绝不用今天的值、成本价或 0/1 伪造**；
+     * - 不因为「新字段存在」就强行填值 —— 那会制造看起来很完整的假依据。
+     */
+    /*
+     * 依据直接来自**估值引擎上报的 `r.basis`**。
+     *
+     * 为什么不让快照自己查：引擎是唯一握着「实际用到的 quote」的地方；
+     * 快照若自己按 instrumentId 反查，会拿到「最新的」而不是「当时用的」，
+     * 那正是历史不可自证的根源。
+     */
+    const basis = {
+      /*
+       * 降级原因（P1-2）：不可估值时如实落盘，供历史解释。
+       * 可靠估值时为空数组 —— 不写无意义的占位。
+       */
+      reasons: reliable ? [] : r.reasons,
+      asOf: r.asOf,
+      priceKind: r.basis?.priceKind,
+      quoteStatus: r.basis?.quoteStatus,
+      quoteSource: r.basis?.quoteSource,
+      fxStatus: r.basis?.fxStatus,
+      fxSource: r.basis?.fxSource,
+    }
+
     positions.push({
       instrumentId: holding.instrumentId,
       accountId: holding.accountId,
@@ -180,12 +226,31 @@ export function buildSnapshot(
       rateToCny: resolved,
       // 不可估值 → undefined（**绝不写 0**）
       valueCny: reliable && r.value !== undefined ? round2(r.value) : undefined,
+      /*
+       * stale 的展示价（P1-3）：只记录「当时确实读到、但已过期」的价格，
+       * 让历史快照仍能解释「那天大概值多少」。**不参与总额**。
+       * 不可估值（无价可读）时保持 undefined —— 绝不用成本价冒充。
+       */
+      staleValueCny:
+        r.status === 'stale' && r.staleDisplayValueCny !== undefined
+          ? round2(r.staleDisplayValueCny)
+          : undefined,
       reliable,
       assetClassAtCapture: classAtCapture,
+      isLiabilityAtCapture,
+      ...basis,
     })
   }
 
   const netWorth = round2(totalAssets - totalLiabilities)
+
+  /*
+   * 捕获时刻（Schema V8）。
+   *
+   * 刻意用一次 `new Date()` 取值并复用给 `createdAt` 与 `capturedAt`，
+   * 避免同一份快照里出现两个不同时刻（`createdAt` 与 `capturedAt` 互相矛盾）。
+   */
+  const capturedAtIso = new Date(options.now ?? Date.now()).toISOString()
 
   /* ---- 2) 当日交易 → 外部现金流 ---- */
   /*
@@ -221,10 +286,27 @@ export function buildSnapshot(
     unavailableCount,
     staleCount,
     isComplete: unavailableCount === 0 && staleCount === 0,
-    // 本阶段只产生 REAL；BACKFILLED / ESTIMATED 留待未来的回填功能
+    /*
+     * `captureKind` 只在此处产生 `REAL`。
+     *
+     * `BACKFILLED` / `ESTIMATED` 是**为未来的回填能力预留**的取值 ——
+     * 当前没有任何路径会写它们，因为历史回填需要 as-of 估值能力（尚未具备）。
+     * 一旦将来实现回填，必须写入相应取值，**不得再标 REAL**。
+     */
     captureKind: 'REAL',
     attributionStatus: 'unavailable',
-    createdAt: new Date(options.now ?? Date.now()).toISOString(),
+    createdAt: capturedAtIso,
+    // ---- Schema V8：时间语义 ----
+    /*
+     * 期初快照的日期。取不到就留 undefined（不回填、不猜测）。
+     * 有了它，`openingNetWorth` 才能自证「从哪一天开始算」。
+     */
+    openingDate: options.opening?.date,
+    /*
+     * 本次内容对应的捕获时刻。
+     * 与 `createdAt` 的区别：当日快照可被多次刷新，`createdAt` 是首次创建时间。
+     */
+    capturedAt: capturedAtIso,
   }
 
   /* ---- 4) 归因 ---- */
@@ -305,7 +387,51 @@ export async function captureSnapshot(
   options: CaptureOptions = {},
 ): Promise<CaptureResult> {
   const portfolio = await repo.loadPortfolio()
-  const date = options.date ?? new Date(options.now ?? Date.now()).toISOString().slice(0, 10)
+  // 缺省用**本地日**（与 buildSnapshot 一致；此前这里是 UTC 日，两者口径不同）
+  const date = options.date ?? localDate(new Date(options.now ?? Date.now()))
+
+  /*
+   * ## 日期守卫（Phase 8 / W8，P0-1）
+   *
+   * ### 为什么必须拦
+   *
+   * `buildSnapshot` 用的是**当前**持仓、**最新**行情、**当前**汇率 ——
+   * 它没有 as-of 能力。因此对**过去或未来**的日期调用它，会产出一份
+   * 「日期在过去/未来、数据却是现在、`captureKind` 标为 `REAL`」的快照。
+   * 那是**伪造历史事实**，正是本项目明确禁止的行为。
+   *
+   * ### 为什么守卫放在这里而不是只在 captureRange
+   *
+   * `captureRange` 只是 `captureSnapshot` 的一个调用方。若只在那一层拦，
+   * 任何直接调用 `captureSnapshot({ date: 过去 })` 的代码（API / UI / 未来功能）
+   * 都能绕过它 —— W8 审计确认这正是当时唯一的破口。
+   * 因此守卫必须落在**唯一的写入原语**上。
+   *
+   * ### 规则
+   *
+   * | 日期 | 处理 |
+   * | --- | --- |
+   * | 本地今天 | 允许（当日可刷新） |
+   * | 过去 | **拒绝**（需要 as-of 能力，尚未具备） |
+   * | 未来 | **拒绝**（未来尚未发生，不可能有事实） |
+   *
+   * `dryRun`（仅预览、不写入）**不受限**，因为它不产生任何历史事实。
+   */
+  if (!options.dryRun) {
+    const today = localDate(new Date(options.now ?? Date.now()))
+    if (date < today) {
+      throw new Error(
+        `拒绝为过去日期（${date}）创建快照：估值使用的是当前持仓、最新行情与当前汇率，` +
+          '不具备「按当时价格重建」的 as-of 能力。历史日期补录会产出伪造历史，' +
+          '因此必须来自当时真实发生的事实，而不是事后重算。',
+      )
+    }
+    if (date > today) {
+      throw new Error(
+        `拒绝为未来日期（${date}）创建快照：未来尚未发生，不可能存在资产事实。`,
+      )
+    }
+  }
 
   // 期初：优先用传入值，否则取前一天的快照
   let opening = options.opening

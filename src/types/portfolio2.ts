@@ -497,6 +497,19 @@ export interface SnapshotPosition {
    * 下游必须显式处理缺失，而不是把 0 当成「价值为零」。
    */
   valueCny?: number
+  /**
+   * **仅供展示**的过期价（Schema V8，P1-3）。
+   *
+   * 为什么需要：`stale` 持仓的 `price` / `valueCny` 都是 `undefined`
+   * （不可靠、不计入总额），于是历史快照里**连当时的过期价都没留下** ——
+   * 事后无法回答「那天大概值多少」，也无法判断缺口有多大。
+   *
+   * ⚠️ 严格约束：
+   * - **绝不参与任何总额计算**（与 `ValuationResult.nativeValue` 同一性质）；
+   * - 仅在行情**确实过期但可读**时写入；
+   * - **绝不使用成本价兜底** —— 成本价不是市价，用它冒充会误导。
+   */
+  staleValueCny?: number
   /** 该条是否可靠估值（false 时不参与总额） */
   reliable: boolean
   /**
@@ -512,6 +525,61 @@ export interface SnapshotPosition {
    * 历史趋势必须明确标注「历史分类数据不可用」，宁可留缺口也不伪造。
    */
   assetClassAtCapture?: AssetClass
+
+  /* ---- 估值依据（Schema V8 / Phase 8 W8）---- */
+
+  /**
+   * 该价格的**依据时间**（行情 / 汇率 / 手动价的 asOf）。
+   *
+   * 为什么必须落盘：`quotes` / `fxRates` 是可更新的，
+   * 只存数字会让历史快照「有值但无法自证」。
+   * 有了它才能回答「2026-10-01 这一天，这个资产为什么是这个价值」。
+   *
+   * ⚠️ **v7 及以前的历史快照没有这个字段，也不回填** —— 回填等于伪造依据。
+   */
+  asOf?: IsoDateTime
+  /**
+   * 价格类型（市场价格 / 单位净值 / 估算净值 / 手动价格）。
+   *
+   * 事后必须能区分「这是市价还是估算」，否则历史解释会失真。
+   */
+  priceKind?: PriceKind
+  /**
+   * 捕获当时该行情/估值的状态。
+   *
+   * 区分 `LIVE` / `DELAYED` / `CLOSED` / `MANUAL` / `STALE` / `ERROR`
+   * 以及「根本没有行情」。此前这些信息被压成 `reliable` 布尔，
+   * 导致「当时是收盘价」与「当时缺行情」在历史里完全同形。
+   */
+  quoteStatus?: QuoteStatus
+  /** 行情来源（如 `manual` / `fundgz`），便于事后核对 */
+  quoteSource?: string
+  /** 汇率状态（`LIVE` / `DELAYED` / `STALE` / `MANUAL` / `ERROR`） */
+  fxStatus?: FxStatus
+  /** 汇率来源 */
+  fxSource?: string
+  /**
+   * **捕获当时**不可估值 / 降级的具体原因（Schema V8）。
+   *
+   * 为什么必须落盘：`reliable` 只是一个布尔，无法区分
+   * 「当时缺行情」「当时汇率过期」「当时行情报错」。
+   * 缺少它，历史快照就只能说「这项不可靠」，却说不清**为什么**，
+   * 事后也无法判断当年的数据缺口是暂时性的还是系统性的。
+   *
+   * 取值与 `ValuationReason` 一致（如 `missing_quote` / `stale_fx`）；
+   * 可靠估值的项为空数组。
+   */
+  reasons?: string[]
+  /**
+   * **捕获当时**该持仓是否负债（Schema V8）。
+   *
+   * 与 `assetClassAtCapture` 同理：负债判定依赖账户与标的的当前状态，
+   * 事后用今天的状态回溯会把历史占比重画。
+   *
+   * ⚠️ v7 及以前没有该字段，不回填；`undefined` 表示「无法判断」，
+   * 历史占比必须明确标注，而不是假定为资产。
+   */
+  isLiabilityAtCapture?: boolean
 }
 
 /**
@@ -611,6 +679,27 @@ export interface Snapshot {
    * 本阶段只产生 `REAL`，不实现 BACKFILLED / ESTIMATED。
    */
   captureKind?: 'REAL' | 'BACKFILLED' | 'ESTIMATED'
+  /**
+   * 期初快照的日期（Schema V8）。
+   *
+   * 为什么需要：`openingNetWorth` 等金额只说明「从哪个数开始」，
+   * 不说明**期初是哪一天**。若期初不是紧邻前一日（缺日、迁移的月度点），
+   * 事后无法识别 —— 只能看到一组看起来正常的收益数字。
+   * 有了它就能自证间隔。
+   *
+   * ⚠️ v7 及以前不回填（回填等于伪造）。
+   */
+  openingDate?: IsoDate
+  /**
+   * 实际捕获 / 刷新时刻（Schema V8，ISO 时间）。
+   *
+   * 与 `createdAt` 的区别：`createdAt` 是**首次**创建时间；
+   * 当日快照可能在同一天被多次刷新（W7 起允许），
+   * `capturedAt` 记录的是**内容所对应**的那次捕获。
+   *
+   * ⚠️ v7 及以前不回填。
+   */
+  capturedAt?: IsoDateTime
   /** 归因可信度 */
   attributionStatus: AttributionStatus
   /** 无法完整归因时的原因清单 */

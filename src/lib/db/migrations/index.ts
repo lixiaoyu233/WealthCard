@@ -35,11 +35,13 @@ import {
   SCHEMA_VERSION_WITH_CAPTURE_KIND,
   SCHEMA_VERSION_WITH_TRANSACTION_STATUS,
   SCHEMA_VERSION_WITH_NULLABLE_VALUATION,
+  SCHEMA_VERSION_WITH_HISTORICAL_FACTS,
 } from '../schema'
 import { SCHEMA_V3_TO_V4_MIGRATION_ID, migrateV3ToV4 } from './schema-v3-to-v4'
 import { SCHEMA_V4_TO_V5_MIGRATION_ID, migrateV4ToV5 } from './schema-v4-to-v5'
 import { SCHEMA_V5_TO_V6_MIGRATION_ID, migrateV5ToV6 } from './schema-v5-to-v6'
 import { SCHEMA_V6_TO_V7_MIGRATION_ID, migrateV6ToV7 } from './schema-v6-to-v7'
+import { SCHEMA_V7_TO_V8_MIGRATION_ID, migrateV7ToV8 } from './schema-v7-to-v8'
 import { summarizeVerify, verifyMigration, type VerifyReport } from './verify'
 
 import type { MigrationStore } from '../repository'
@@ -50,6 +52,7 @@ export {
   SCHEMA_V4_TO_V5_MIGRATION_ID,
   SCHEMA_V5_TO_V6_MIGRATION_ID,
   SCHEMA_V6_TO_V7_MIGRATION_ID,
+  SCHEMA_V7_TO_V8_MIGRATION_ID,
 }
 
 export type MigrateOutcome =
@@ -241,6 +244,21 @@ export async function migrate(options: MigrateOptions): Promise<MigrateOutcome> 
     await store.writePortfolio(current)
     await appendLog(store, upgraded.record)
     applied.push(SCHEMA_V6_TO_V7_MIGRATION_ID)
+  }
+
+  /*
+   * V7 → V8：快照的历史事实字段（估值依据 / 捕获时刻 / 当时是否负债）。
+   * **纯零填充**：不改动任何数据 —— 存量快照的新字段保持 undefined，
+   * 含义是「无法追溯」，而不是「值为零」。
+   */
+  const alreadyAppliedV8 = applied.includes(SCHEMA_V7_TO_V8_MIGRATION_ID)
+  const sourceBelowV8 = (sourceVersion ?? 0) < SCHEMA_VERSION_WITH_HISTORICAL_FACTS
+  if (!alreadyAppliedV8 && sourceBelowV8) {
+    const upgraded = migrateV7ToV8({ portfolio: current, now: iso })
+    current = upgraded.portfolio
+    await store.writePortfolio(current)
+    await appendLog(store, upgraded.record)
+    applied.push(SCHEMA_V7_TO_V8_MIGRATION_ID)
   }
 
   await store.writeMeta({

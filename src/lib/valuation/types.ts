@@ -17,7 +17,13 @@
  * - 正确结果：CNY 估值 unavailable，`unavailableCount + 1`，不计入 totalAssets
  */
 
-import type { AssetClass, CurrencyCode } from '../../types/portfolio2'
+import type {
+  AssetClass,
+  CurrencyCode,
+  FxStatus,
+  PriceKind,
+  QuoteStatus,
+} from '../../types/portfolio2'
 
 /* ------------------------------------------------------------------ *
  * 估值状态
@@ -89,12 +95,54 @@ export interface ValuationResult {
   /** 资产类别，便于按类别汇总（取不到标的时为 undefined） */
   assetClass?: AssetClass
   /**
+   * 该持仓是否计入**负债**（Phase 8 / W8）。
+   *
+   * 由 `lib/portfolio/liability.ts` 的 `decideLiability()` **统一判定**：
+   * 同时认 `Instrument.assetClass === 'liability'` 与 `Account.isLiability === true`，
+   * 两者同时成立只算一次（布尔），冲突时按更保守的负债处理并标记。
+   *
+   * ⚠️ 下游（`calculateTotals` / `buildSnapshot` / `deriveAnalysis`）
+   * **必须读这个字段**，不得各自重写判据 —— 否则口径会漂移。
+   */
+  isLiability: boolean
+  /** 负债判定依据（便于 UI 解释「为什么算作负债」） */
+  liabilityReason?: 'instrument_asset_class' | 'account_flag' | 'both' | 'conflict' | 'none'
+  /** 两个来源结论冲突（需用户核实；不静默处理） */
+  liabilityConflict?: boolean
+  /**
    * 参考值：例如「无可用行情，但有成本价」时的成本金额（原币）。
    * **仅供 UI 作为线索展示，绝不参与总额**。
    */
   fallbackValueInCurrency?: number
   /** 数据时间：行情或汇率的依据时间，便于展示「最后更新」 */
   asOf?: string
+  /**
+   * `stale` 时的**折后展示值**（人民币，Schema V8 / P1-3）。
+   *
+   * 与 `fallbackValueInCurrency`（原币、可能是成本价线索）不同：
+   * 本字段只在**行情确实过期但价格可读、且汇率可折算**时给出，
+   * 用于历史快照保留「当时的过期价」。
+   * **绝不参与任何总额计算**。
+   */
+  staleDisplayValueCny?: number
+  /**
+   * 本次估值实际用到的**行情依据**（Phase 8 / W8）。
+   *
+   * 引擎是唯一握着 quote 的地方，因此由它上报，供快照落盘。
+   * 取不到依据时字段为 `undefined`（= UNKNOWN），**不得伪造**。
+   */
+  basis?: {
+    /** 价格类型（市场价格 / 单位净值 / 估算净值 / 手动价格） */
+    priceKind?: PriceKind
+    /** 当时该行情的状态 */
+    quoteStatus?: QuoteStatus
+    /** 行情来源 */
+    quoteSource?: string
+    /** 汇率状态（外币持仓才有） */
+    fxStatus?: FxStatus
+    /** 汇率来源 */
+    fxSource?: string
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -107,6 +155,14 @@ export interface UnvaluedItem {
   status: Extract<ValuationStatus, 'unavailable' | 'stale'>
   reasons: ValuationReason[]
   assetClass?: AssetClass
+  /**
+   * 是否负债（W8）。
+   *
+   * 不可估值项同样需要这个标记：
+   * 「一项无法估值的负债」与「一项无法估值的资产」含义不同，
+   * 丢掉它会让 UI 无法正确归类提示。
+   */
+  isLiability?: boolean
   currency: CurrencyCode
   /** 仅 stale 项可能有展示值（不计入总额） */
   displayValue?: number

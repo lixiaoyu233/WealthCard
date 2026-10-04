@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest'
 import type { Snapshot, Transaction } from '../../types/portfolio2'
 import { classifyPortfolioFlows, netExternalFlow } from './cashflow'
 import { attribute, checkIdentity, computeFxEffect } from './attribution'
-import { buildSnapshot, canShowReturn, captureSnapshot, externalNetFlow, previousDate } from './snapshot'
+import { buildSnapshot, canShowReturn, captureSnapshot, externalNetFlow, localDate, previousDate } from './snapshot'
 import { summarizePerformance } from './summary'
 import {
   NOW,
+  nowForLocalDate,
   makeAccount,
   makeHolding,
   makeInstrument,
@@ -580,9 +581,11 @@ describe('Snapshot 幂等（同日重复执行只更新）', () => {
     const p = simplePortfolio({ cashCny: 10000 })
     await repo.replaceAll(p)
 
-    const first = await captureSnapshot(repo, { date: '2026-10-03', now: NOW })
-    const second = await captureSnapshot(repo, { date: '2026-10-03', now: NOW })
-    const third = await captureSnapshot(repo, { date: '2026-10-03', now: NOW })
+    // W8 起 captureSnapshot 只允许写「本地今天」；用与 date 同一天的时钟
+    const at = nowForLocalDate('2026-10-03')
+    const first = await captureSnapshot(repo, { date: '2026-10-03', now: at })
+    const second = await captureSnapshot(repo, { date: '2026-10-03', now: at + 1000 })
+    const third = await captureSnapshot(repo, { date: '2026-10-03', now: at + 2000 })
 
     expect(second.action).toBe('updated')
     expect(third.action).toBe('updated')
@@ -594,17 +597,37 @@ describe('Snapshot 幂等（同日重复执行只更新）', () => {
   it('不同日期各写入一条', async () => {
     const repo = createInMemoryRepository()
     await repo.replaceAll(simplePortfolio({ cashCny: 10000 }))
-    await captureSnapshot(repo, { date: '2026-10-03', now: NOW })
-    await captureSnapshot(repo, { date: '2026-10-04', now: NOW })
+
+    /*
+     * W8 起**不能**为过去日期创建快照（估计没有 as-of 能力，会产出伪造历史）。
+     * 因此这里直接写入一条"当时已存在的历史快照"来模拟历史，
+     * 再用 captureSnapshot 生成**今天**的快照。
+     */
+    const today = localDate()
+    const yesterday = previousDate(today)
+    await repo.snapshots.put(
+      buildSnapshot(await repo.loadPortfolio(), { date: yesterday, now: nowForLocalDate(yesterday) }).snapshot,
+    )
+
+    await captureSnapshot(repo, { date: today, now: Date.now() })
     expect(await repo.snapshots.count()).toBe(2)
   })
 
   it('第二天的快照会以上一份为期初（幂等且可归因）', async () => {
     const repo = createInMemoryRepository()
     await repo.replaceAll(simplePortfolio({ cashCny: 10000 }))
-    await captureSnapshot(repo, { date: '2026-10-03', now: NOW })
+    /*
+     * 历史快照直写（W8 起不能为过去日期创建）。
+     * 必须用「昨天」：期初与今天**紧邻**才能正常归因 ——
+     * 跨多日会被 W7/W8 的间隔检测降级为 unavailable（那是正确行为）。
+     */
+    const today = localDate()
+    const yesterday = previousDate(today)
+    await repo.snapshots.put(
+      buildSnapshot(await repo.loadPortfolio(), { date: yesterday, now: nowForLocalDate(yesterday) }).snapshot,
+    )
 
-    const next = await captureSnapshot(repo, { date: '2026-10-04', now: NOW })
+    const next = await captureSnapshot(repo, { date: today, now: Date.now() })
     expect(next.snapshot.openingNetWorth).toBe(10000)
     // 没有现金流与汇率变动 → 投资收益 0，且恒等式成立
     expect(next.snapshot.investmentReturn).toBe(0)
@@ -614,6 +637,7 @@ describe('Snapshot 幂等（同日重复执行只更新）', () => {
   it('dryRun 不写入', async () => {
     const repo = createInMemoryRepository()
     await repo.replaceAll(simplePortfolio({ cashCny: 10000 }))
+    // dryRun 不写入，因此**不受**日期守卫限制（它不产生历史事实）
     const r = await captureSnapshot(repo, { date: '2026-10-03', now: NOW, dryRun: true })
     expect(r.snapshot.netWorth).toBe(10000)
     expect(await repo.snapshots.count()).toBe(0)
@@ -783,11 +807,17 @@ describe('partial 状态：禁止展示确定收益，但保留快照与状态�
       quotes: [{ id: 'q1', instrumentId: STOCK, priceKind: 'market_price', marketPrice: 12, currency: 'CNY', source: 't', timestamp: new Date(now - 10 * 3600 * 1000).toISOString(), status: 'LIVE' }],
     }))
 
+    /*
+     * opening 必须**紧邻**今天，否则 W7/W8 的间隔检测会把归因降为 unavailable
+     * （这是正确行为：跨多日不能算作「当日」收益）。
+     * 这里用「昨天」以便真正测到 partial 的保留。
+     */
+    const today = localDate()
     const opening = makeSnapshot({
-      id: 's0', date: '2026-10-02', netWorth: 1000, isComplete: true, attributionStatus: 'complete',
+      id: 's0', date: previousDate(today), netWorth: 1000, isComplete: true, attributionStatus: 'complete',
       positions: [{ instrumentId: STOCK, accountId: A, quantity: 100, price: 10, currency: 'CNY', rateToCny: 1, valueCny: 1000, reliable: true }],
     })
-    const r = await captureSnapshot(repo, { date: '2026-10-03', now, opening })
+    const r = await captureSnapshot(repo, { date: today, now, opening })
 
     // 快照写入成功（不是被丢弃）
     expect(await repo.snapshots.count()).toBe(1)

@@ -421,6 +421,41 @@ export interface IdentityCheck {
  *
  * 期末 = 期初 + 外部流入 − 外部流出 + investmentReturn + fxEffect + otherAdjustment
  */
+/**
+ * 校验快照的内部一致性（Phase 8 / W8，P1-5）。
+ *
+ * ## 原先的问题：形式上恒真
+ *
+ * 原来的实现只校验 `opening + 流入 − 流出 + return + fx + other === netWorth`。
+ * 但 `investmentReturn` 本身就是由该式**移项定义**的，
+ * 而 `otherAdjustment` 在残差超阈值时又被赋为 `residual` ——
+ * 两者恰好互相抵消，于是 `drift` **在代数上恒为 0**。
+ * 这个函数因此**永远返回 ok: true**，是一个没有校验意义的门槛。
+ *
+ * ## 现在的校验内容
+ *
+ * 1. **恒等式**（保留，但明确它只验证「数字自洽」）；
+ * 2. **残差未超容差**（新增，真正能发现问题）——
+ *    残差代表「用已知事实解释不了的部分」。若它超出容差，
+ *    说明该快照存在未记录的资金流动或估值缺口，
+ *    **不应**被当作可信的历史事实；
+ * 3. `attributionStatus` 与实际数据一致（如残差超限却标 `complete`）→ 报错。
+ *
+ * ## 边界（必须明确）
+ *
+ * 它**只**证明「数字自洽 + 残差可控」，
+ * **不**证明「这个快照的语义正确」（例如期初跨日、依据缺失等）。
+ * 后者需要 `openingDate` / 依据字段，是另一个层面的校验。
+ */
+function endingIncomplete(snapshot: Snapshot): boolean {
+  return (
+    snapshot.isComplete === false ||
+    (snapshot.unavailableCount ?? 0) > 0 ||
+    (snapshot.staleCount ?? 0) > 0 ||
+    snapshot.fxEffect === undefined
+  )
+}
+
 export function checkIdentity(snapshot: Snapshot, tolerance = 0.01): IdentityCheck {
   const {
     netWorth,
@@ -446,6 +481,40 @@ export function checkIdentity(snapshot: Snapshot, tolerance = 0.01): IdentityChe
     (otherAdjustment ?? 0)
 
   const drift = Math.round((netWorth - expected) * 100) / 100
+
+  /*
+   * 残差校验（真正有检出能力的一项）。
+   *
+   * `residual` 超出容差意味着「已知事实解释不了这段变化」。
+   * 此时快照仍然被保留（事实记录），但**不得**被当成可信历史。
+   */
+  const residual = Math.abs(snapshot.residual ?? 0)
+  if (residual > tolerance) {
+    return {
+      ok: false,
+      drift,
+      detail:
+        `残差 ${snapshot.residual} 超出容差 ${tolerance}：` +
+        '该快照存在已知事实无法解释的变化（未记录的资金流动或估值缺口），' +
+        '不应作为可信的历史事实使用。' +
+        (snapshot.otherAdjustmentReason ? `原因：${snapshot.otherAdjustmentReason}` : ''),
+    }
+  }
+
+  /*
+   * 状态一致性：残差已归零（在容差内）却标成 partial，说明
+   * `attributionStatus` 与数据不符 —— 同样值得暴露。
+   */
+  if (attributionStatus === 'partial' && residual <= tolerance && !endingIncomplete(snapshot)) {
+    return {
+      ok: false,
+      drift,
+      detail:
+        'attributionStatus 为 partial，但残差在容差内且数据完整 —— ' +
+        '状态与数据不一致（可能是降级原因未被记录）。',
+    }
+  }
+
   return {
     ok: Math.abs(drift) <= tolerance,
     drift,

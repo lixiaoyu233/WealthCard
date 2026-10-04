@@ -302,17 +302,42 @@ describe('行情写入：经 Repository 持久化并保留来源与状态', () =
     expect(q.source).toBe('manual')
   })
 
-  it('同一标的同一 priceKind 覆盖写入（不无限增长）', async () => {
+  it('【W8】不同时间点的行情各自保留（历史可追溯）', async () => {
     const repo = await seedRepo()
+    /*
+     * W8 起行情按 (标的, priceKind, source, 时间点) 业务键去重**追加**：
+     * 不同时间点必须各自成行，否则「当时的行情」会被永久覆盖，
+     * 快照里的数字就无法自证（W8 审计 P0-3）。
+     */
+    const t1 = '2026-10-01T10:00:00.000Z'
+    const t2 = '2026-10-02T10:00:00.000Z'
+    const t3 = '2026-10-03T10:00:00.000Z'
+    for (const [price, ts] of [[10, t1], [11, t2], [12, t3]] as const) {
+      await upsertQuote(repo, {
+        instrumentId: 'i_stock', priceKind: 'market_price', price,
+        currency: 'CNY', timestamp: ts, now: NOW,
+      })
+    }
+    const quotes = (await repo.loadPortfolio()).quotes
+    expect(quotes).toHaveLength(3)
+    // 每个时间点都能查回当时的价格
+    expect(quotes.find((q) => q.timestamp === t1 && quotePrice(q) === 10)).toBeDefined()
+    expect(quotes.find((q) => q.timestamp === t2 && quotePrice(q) === 11)).toBeDefined()
+    expect(quotes.find((q) => q.timestamp === t3 && quotePrice(q) === 12)).toBeDefined()
+  })
+
+  it('【W8】同一时间点重复录入只保留一条（防重复点击堆积）', async () => {
+    const repo = await seedRepo()
+    const ts = '2026-10-02T10:00:00.000Z'
     for (const price of [10, 11, 12]) {
       await upsertQuote(repo, {
         instrumentId: 'i_stock', priceKind: 'market_price', price,
-        currency: 'CNY', timestamp: NOW().toISOString(), now: NOW,
+        currency: 'CNY', timestamp: ts, now: NOW,
       })
     }
     const quotes = (await repo.loadPortfolio()).quotes
     expect(quotes).toHaveLength(1)
-    expect(quotePrice(quotes[0])).toBe(12)
+    expect(quotePrice(quotes[0])).toBe(12) // 最后一次更正生效
   })
 
   it('币种与标的不一致时拒绝', async () => {
@@ -348,12 +373,26 @@ describe('行情写入：经 Repository 持久化并保留来源与状态', () =
  * ================================================================== */
 
 describe('汇率写入：经 Repository 覆盖写入', () => {
-  it('同币种对覆盖写入（不无限增长）', async () => {
+  it('【W8】不同时间点的汇率各自保留', async () => {
     const repo = await seedRepo()
-    for (const rate of [7.0, 7.1, 7.2]) {
+    const days = ['2026-10-01', '2026-10-02', '2026-10-03']
+    for (const [i, rate] of [7.0, 7.1, 7.2].entries()) {
       await upsertFxRate(repo, {
         baseCurrency: 'USD', quoteCurrency: 'CNY', rate,
-        timestamp: NOW().toISOString(), now: NOW,
+        timestamp: `${days[i]}T10:00:00.000Z`, now: NOW,
+      })
+    }
+    const rates = (await repo.loadPortfolio()).fxRates
+    expect(rates).toHaveLength(3)
+    expect(rates.map((r) => r.rate).sort()).toEqual([7.0, 7.1, 7.2])
+  })
+
+  it('【W8】同一时间点重复录入汇率只保留一条', async () => {
+    const repo = await seedRepo()
+    const ts = '2026-10-02T10:00:00.000Z'
+    for (const rate of [7.0, 7.1, 7.2]) {
+      await upsertFxRate(repo, {
+        baseCurrency: 'USD', quoteCurrency: 'CNY', rate, timestamp: ts, now: NOW,
       })
     }
     const rates = (await repo.loadPortfolio()).fxRates

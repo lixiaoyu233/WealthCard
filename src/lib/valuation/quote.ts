@@ -74,13 +74,49 @@ export function judgeQuote(
   return { usable: true, price, status: q.status }
 }
 
-/** 从一组行情里取「该标的最新的一条」 */
-export function latestQuoteFor(quotes: Quote[], instrumentId: string): Quote | undefined {
-  const list = quotes.filter((q) => q.instrumentId === instrumentId)
-  if (list.length === 0) return undefined
-  return list.reduce((a, b) =>
-    new Date(a.timestamp).getTime() >= new Date(b.timestamp).getTime() ? a : b,
-  )
+/**
+ * 从一组行情里取「该标的最新的一条」。
+ *
+ * ## as-of 语义（Phase 8 / W8）
+ *
+ * 给出 `asOf` 时，只在 `timestamp <= asOf` 的行情里取最新一条 ——
+ * 即「**在那一刻可用的**最新行情」。
+ *
+ * ### 为什么必须显式定义这一点
+ *
+ * W8 起行情**按时间点累积**（不再覆盖），因此「最新一条」在
+ * 两个不同语境下含义不同：
+ *
+ * | 语境 | 应取 |
+ * | --- | --- |
+ * | **实时估值**（当前净值） | 全部行情里最新的（`asOf` 省略） |
+ * | **快照捕获**（当时价值） | **`<= 捕获时刻`** 里最新的（传 `asOf`） |
+ *
+ * 传 `asOf` 可防止「未来日期的行情」影响今天的捕获；
+ * 而**历史快照一旦写下就不再重算**（W8 的不变量），
+ * 因此事后修改行情不会改变过去的快照。
+ *
+ * 同一 `timestamp` 有多条时不在此处裁决 ——
+ * 业务键去重已保证同 (标的, priceKind, source, 时间点) 只有一条。
+ */
+export function latestQuoteFor(
+  quotes: Quote[],
+  instrumentId: string,
+  asOf?: string,
+): Quote | undefined {
+  const cutoff = asOf === undefined ? Number.POSITIVE_INFINITY : new Date(asOf).getTime()
+  let best: Quote | undefined
+  let bestAt = Number.NEGATIVE_INFINITY
+  for (const q of quotes) {
+    if (q.instrumentId !== instrumentId) continue
+    const t = new Date(q.timestamp).getTime()
+    if (!Number.isFinite(t) || t > cutoff) continue
+    if (t > bestAt) {
+      best = q
+      bestAt = t
+    }
+  }
+  return best
 }
 
 /** 供 UI 展示的行情状态文案补充（例如「已收盘」与「已过期」含义不同） */

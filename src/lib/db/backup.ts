@@ -300,6 +300,10 @@ export interface RestorePreview {
  */
 export const UPGRADE_PATHS: Record<number, { to: number; note: string }> = {
   6: { to: 7, note: 'V6 → V7：持仓明细的估值字段改为可缺失，不修改任何历史数据（零填充）' },
+  7: {
+    to: 8,
+    note: 'V7 → V8：新增估值依据/捕获时刻等可选字段，存量数据不回填（缺失=无法追溯，零填充）',
+  },
 }
 
 /** 该来源版本能否被当前版本安全读取 */

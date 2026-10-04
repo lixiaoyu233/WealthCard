@@ -852,6 +852,43 @@ export function availableQuantity(
   return ledger.positions.get(positionKey(accountId, instrumentId))?.quantity ?? 0
 }
 
+/**
+ * 某账户下**全部标的**的可卖数量（Phase 8 / W8，P1-1）。
+ *
+ * ## 为什么需要它
+ *
+ * `availableQuantity()` **每次调用都会完整跑一遍 `deriveLedger`**。
+ * 卖出表单需要「本账户每个标的各有多少」——若逐标的调用它，
+ * 复杂度是 `O(I × T log T)`，打开表单即触发（实测 I=120/T=5000 时桌面 ~460ms）。
+ *
+ * 本函数只派生**一次**，然后按 instrumentId 建索引返回 → `O(T log T + I)`。
+ *
+ * ## 与 `availablePositions` 的关系
+ *
+ * `availablePositions` 已经做到「一次派生」，但它返回的是**扁平列表**，
+ * 且**不过滤**任何东西。用于表单时仍需按账户+标的查表，
+ * 因此这里提供按 `instrumentId` 索引的形态，便于直接替换逐标的调用。
+ *
+ * ⚠️ 调用方**仍需自行过滤**（例如卖出表单要排除现金标的）——
+ * 本函数只回答「有多少」，不决定「能不能卖」。
+ */
+export function availableQuantities(
+  portfolio: Portfolio2,
+  accountId: string,
+): Map<string, number> {
+  const instrumentCurrency = (id: string) =>
+    portfolio.instruments.find((i) => i.id === id)?.currency
+  const ledger = deriveLedger(portfolio.transactions, { instrumentCurrency })
+
+  const out = new Map<string, number>()
+  const prefix = `${accountId}::`
+  for (const [key, pos] of ledger.positions) {
+    if (!key.startsWith(prefix)) continue
+    out.set(key.slice(prefix.length), pos.quantity)
+  }
+  return out
+}
+
 /* ------------------------------------------------------------------ *
  * 供 UI 展示的持仓类型收窄
  * ------------------------------------------------------------------ */

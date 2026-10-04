@@ -194,8 +194,22 @@ export async function ensureDailySnapshot(
        * | 目标日期不是今天 | **不刷新**（历史快照是当时的事实） |
        * | 今天 + attempt=success | **刷新**（跟上当天后续的录入/作废/改行情） |
        */
-      const isMigratedMonthly = existing.positions.length === 0
-      if (isMigratedMonthly || date !== today) {
+      /*
+       * ### 迁移来的月度快照：用 `capturedAt` 判定，而不是 `positions.length`
+       *
+       * ⚠️ 这里曾经写 `isMigratedMonthly = existing.positions.length === 0`，
+       * 于是「**今天刚捕获的空快照**」被误判为「迁移来的月度点」→
+       * 整天拒绝刷新 → 当天快照永久为 0，而首页仍显示「今日快照：已生成」。
+       *
+       * 该误判最常发生在**首次使用**：应用在挂载时就捕获了一份空快照
+       * （此时还没有任何持仓），随后用户建立账户/持仓，却再也刷不动它。
+       *
+       * 正确判据：**迁移快照没有 `capturedAt`**（V8 之前由旧代码写入，
+       * 或由 `legacy-v2-to-schema-v3` 生成），
+       * 而今天由 `captureSnapshot` 产生的快照一定带 `capturedAt`。
+       */
+      const isLegacySnapshot = existing.capturedAt === undefined
+      if (isLegacySnapshot || date !== today) {
         return { action: 'already-captured', date, snapshot: existing, recoveredAttempt: false }
       }
 

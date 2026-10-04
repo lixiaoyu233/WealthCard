@@ -3,7 +3,7 @@ import { Info } from 'lucide-react'
 import type { Portfolio2, TransactionType } from '../types/portfolio2'
 import type { PortfolioRepository } from '../lib/db/repository'
 import {
-  availableQuantity,
+  availableQuantities,
   recordTransaction,
   type RecordTransactionInput,
 } from '../lib/ledger/transactionService'
@@ -108,11 +108,19 @@ export default function TransactionSheet({
     [portfolio, type],
   )
 
-  /** 当前账户下可卖持仓（供卖出限制） */
+  /**
+   * 当前账户下可卖持仓（供卖出限制）。
+   *
+   * ⚠️ 必须用 `availableQuantities()`（**一次**派生）而不是逐标的调用
+   * `availableQuantity()`（每次调用都完整派生一遍账本，O(I × T log T)）。
+   * 注意仍以 `instrumentOptions` 作为过滤源 —— 它在卖出场景排除现金标的，
+   * 换成 `availablePositions` 会把现金混进可卖列表。
+   */
   const sellable = useMemo(() => {
     if (type !== 'sell' || !accountId) return []
+    const qtyByInstrument = availableQuantities(portfolio, accountId)
     return instrumentOptions
-      .map((i) => ({ inst: i, qty: availableQuantity(portfolio, accountId, i.id) }))
+      .map((i) => ({ inst: i, qty: qtyByInstrument.get(i.id) ?? 0 }))
       .filter((x) => x.qty > 0)
   }, [type, accountId, instrumentOptions, portfolio])
 

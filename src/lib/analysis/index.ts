@@ -79,7 +79,13 @@ export function deriveAnalysis(input: DeriveAnalysisInput): AnalysisView {
       nativeValue: r.nativeValue,
       quantity: holding?.quantity ?? 0,
       classConfirmed: cls.confirmed,
-      isLiability: r.assetClass === 'liability' || (instrument?.assetClass === 'liability' && cls.confirmed),
+      /*
+       * 负债判定**只读估值结果**（W8 统一口径）。
+       *
+       * 原先这里自己拼 `r.assetClass === 'liability' || instrument?.assetClass === 'liability'`，
+       * 完全不看账户的 `isLiability`，与引擎/快照可能得出不同结论。
+       */
+      isLiability: r.isLiability,
     }
   })
 

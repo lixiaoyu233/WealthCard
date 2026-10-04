@@ -108,7 +108,14 @@ export interface QuoteRepository extends Repository<Quote> {
 
 export interface FxRateRepository extends Repository<FxRate> {
   pair(base: string, quote: string): Promise<FxRate[]>
-  /** 覆盖写入「同一币种对同来源」的记录，避免无限增长 */
+  /**
+   * 覆盖写入「同一币种对同来源」的记录。
+   *
+   * ⚠️ **Phase 8 / W8 起不再用于正常录入路径**：它会删除该币种对同来源的
+   * **全部历史汇率**，使「当时的汇率」不可追溯（W8 审计 P0-3）。
+   * 录入请改用 `upsertFxRate()`（按业务键去重追加）。
+   * 本方法保留给「清理重复来源」这类显式运维场景。
+   */
   upsertLatest(rate: FxRate): Promise<void>
 }
 

@@ -25,10 +25,13 @@ import type {
   Holding,
   Instrument,
   Portfolio2,
+  Quote,
+  FxStatus,
 } from '../../types/portfolio2'
 import { type FxTable, convert, createFxTable } from './fx'
 import { judgeQuote, latestQuoteFor, quotePrice as quoteDisplayPrice } from './quote'
 import { DEFAULT_QUOTE_POLICY, type QuotePolicy } from './policy'
+import { decideLiability } from '../portfolio/liability'
 import {
   type PortfolioTotals,
   type UnvaluedItem,
@@ -130,7 +133,17 @@ function valuateHoldingInner(
   const { instrumentById, accountById } = buildIndex(portfolio)
 
   const instrument: Instrument | undefined = instrumentById.get(holding.instrumentId)
+  const account = accountById.get(holding.accountId)
   const reasons: ValuationReason[] = []
+
+  /*
+   * 负债判定只做一次（Phase 8 / W8）。
+   *
+   * 这是**唯一**的判定点：结果随 `ValuationResult` 向下游传递，
+   * `calculateTotals` / `buildSnapshot` / `deriveAnalysis` 都读它，
+   * 从而杜绝「一个地方认账户、另一个地方认类别」的口径漂移。
+   */
+  const liability = decideLiability(account, instrument)
 
   if (!instrument) {
     return {
@@ -138,6 +151,9 @@ function valuateHoldingInner(
       status: 'unavailable',
       currency: 'CNY',
       reasons: ['missing_instrument'],
+      isLiability: liability.isLiability,
+      liabilityReason: liability.reason,
+      liabilityConflict: liability.conflict,
     }
   }
   // 归属账户缺失不阻断估值（金额仍可计算），但如实上报，便于 UI 提示用户补全
@@ -150,6 +166,21 @@ function valuateHoldingInner(
   let asOf: string | undefined
   let fallbackValueInCurrency: number | undefined
   let quoteUnusableReason: ValuationReason | undefined
+  /** 本次估值实际读到的行情记录（供 basis 上报） */
+  let basisQuote: Quote | undefined
+  /*
+   * 非行情口径的**声明式依据**（Phase 8 / W8，P0-2）。
+   *
+   * `manual` 与「现金」两条路径**不读行情**，因此没有 `Quote` 可上报。
+   * 但「价值来自手动填报」本身就是必须记录的依据 ——
+   * 否则历史快照无法区分「手填的 100 万」与「有行情的 100 万」。
+   *
+   * ⚠️ 这里记录的是**真实存在的依据类型**（MANUAL / 数量即金额），
+   * 不是编造的价格来源。
+   */
+  let declaredBasis:
+    | { priceKind: 'manual'; quoteStatus: 'MANUAL'; quoteSource: string }
+    | undefined
 
   if (holding.valuationMode === 'manual') {
     const v = holding.manualValue
@@ -157,6 +188,8 @@ function valuateHoldingInner(
     if (typeof v === 'number' && Number.isFinite(v)) {
       valueInCurrency = v
       asOf = holding.manualValueAt
+      // 依据 = 用户手动填报（真实依据，非编造）
+      declaredBasis = { priceKind: 'manual', quoteStatus: 'MANUAL', quoteSource: 'manual' }
     } else {
       reasons.push('missing_value')
     }
@@ -170,12 +203,19 @@ function valuateHoldingInner(
     if (typeof q === 'number' && Number.isFinite(q)) {
       valueInCurrency = q
       asOf = holding.updatedAt
+      /*
+       * 现金的数量即金额 —— 这是**事实**（不是行情）。
+       * 依据记为 `manual`（无外部价格来源），以便与「有行情的持仓」区分。
+       */
+      declaredBasis = { priceKind: 'manual', quoteStatus: 'MANUAL', quoteSource: 'quantity' }
     } else {
       reasons.push('missing_value')
     }
   } else {
     const quote = latestQuoteFor(portfolio.quotes, holding.instrumentId)
     const judged = judgeQuote(quote, now, policy)
+    // 无论可用与否都先记下依据（供快照落盘），取不到则为 undefined
+    basisQuote = quote
     if (judged.usable) {
       valueInCurrency = (holding.quantity ?? 0) * judged.price
       asOf = quote?.timestamp
@@ -200,6 +240,21 @@ function valuateHoldingInner(
   // 只有拿到原币价值才谈得上折算；否则直接 unavailable
   if (valueInCurrency === undefined) {
     const isStaleCase = quoteUnusableReason === 'stale_quote' || quoteUnusableReason === 'stale_fx'
+    /*
+     * stale：行情过期但价格可读 → 额外给出**折后展示值**，
+     * 供历史快照保留「当时的过期价」（P1-3）。
+     * 它绝不参与总额（`status` 是 stale，下游只把它当展示值）。
+     */
+    let staleDisplayValueCny: number | undefined
+    if (isStaleCase && fallbackValueInCurrency !== undefined) {
+      const convertedFallback = convert(fallbackValueInCurrency, currency, 'CNY', fx, {
+        now,
+        allowStale: true,
+        fxStaleMs: policy.fxStaleMs,
+      })
+      if (convertedFallback.ok) staleDisplayValueCny = convertedFallback.amount
+    }
+
     return {
       holdingId: holding.id,
       status: isStaleCase ? 'stale' : 'unavailable',
@@ -208,6 +263,15 @@ function valuateHoldingInner(
       assetClass: instrument.assetClass,
       fallbackValueInCurrency,
       asOf,
+      staleDisplayValueCny,
+      isLiability: liability.isLiability,
+      liabilityReason: liability.reason,
+      liabilityConflict: liability.conflict,
+      basis: {
+        priceKind: basisQuote?.priceKind ?? declaredBasis?.priceKind,
+        quoteStatus: basisQuote?.status ?? declaredBasis?.quoteStatus,
+        quoteSource: basisQuote?.source ?? declaredBasis?.quoteSource,
+      },
     }
   }
 
@@ -216,6 +280,15 @@ function valuateHoldingInner(
     allowStale: options.allowStale,
     fxStaleMs: policy.fxStaleMs,
   })
+  /*
+   * 汇率依据：仅外币持仓记录。
+   * `converted.rate.status` 是解析出的状态（LIVE/DELAYED/STALE/MANUAL），
+   * `via` 为经过的币种路径。CNY→CNY 恒为 1，不算外部汇率依据。
+   */
+  const fxBasis =
+    currency === 'CNY' || !converted.ok
+      ? undefined
+      : { fxStatus: converted.rate.status as FxStatus, fxSource: undefined }
 
   if (!converted.ok) {
     // 换算失败：明确区分「缺汇率」与「汇率过期」，并且**不给出 CNY 值**
@@ -231,6 +304,9 @@ function valuateHoldingInner(
       assetClass: instrument.assetClass,
       fallbackValueInCurrency,
       asOf,
+      isLiability: liability.isLiability,
+      liabilityReason: liability.reason,
+      liabilityConflict: liability.conflict,
     }
   }
 
@@ -243,6 +319,15 @@ function valuateHoldingInner(
     reasons,
     assetClass: instrument.assetClass,
     asOf: asOf ?? converted.rate.asOf,
+    isLiability: liability.isLiability,
+    liabilityReason: liability.reason,
+    liabilityConflict: liability.conflict,
+    basis: {
+      priceKind: basisQuote?.priceKind ?? declaredBasis?.priceKind,
+      quoteStatus: basisQuote?.status ?? declaredBasis?.quoteStatus,
+      quoteSource: basisQuote?.source ?? declaredBasis?.quoteSource,
+      ...fxBasis,
+    },
   }
 }
 
@@ -277,9 +362,14 @@ export function calculateTotals(context: ValuationContext): PortfolioTotals {
     })
 
     if (r.status === 'ok' && r.value !== undefined) {
-      // 负债单独归类：以标的的 assetClass 为准（迁移时由 isLiability 写入）
-      const isLiability = r.assetClass === 'liability'
-      if (isLiability) {
+      /*
+       * 负债判定**只读估值结果**（Phase 8 / W8 统一口径）。
+       *
+       * 原先这里自己写 `r.assetClass === 'liability'`，与账户的
+       * `isLiability` 标记脱节 —— 用户勾选「这是负债账户」后净资产不变。
+       * 现在由 `decideLiability()` 统一判定并随结果传递。
+       */
+      if (r.isLiability) {
         // 负债金额按绝对值计入，避免录入正负号不一致导致口径漂移
         totals.totalLiabilities += Math.abs(r.value)
       } else {
@@ -296,6 +386,7 @@ export function calculateTotals(context: ValuationContext): PortfolioTotals {
       status: r.status === 'stale' ? 'stale' : 'unavailable',
       reasons: r.reasons,
       assetClass: r.assetClass,
+      isLiability: r.isLiability,
       currency: r.currency,
       // stale 项的展示值：已是人民币则用它，否则用原币展示值（明确标注过期，不计入总额）
       displayValue: r.status === 'stale' ? (r.value ?? r.valueInCurrency ?? r.fallbackValueInCurrency) : undefined,

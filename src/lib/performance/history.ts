@@ -77,7 +77,14 @@ export type CompositionResult =
   | {
       ok: true
       date: string
+      /** @deprecated 语义已明确为 **grossAssets**（不含负债）；保留以兼容既有调用方 */
       totalCny: number
+      /** 资产合计（**不含**负债）—— 资产类别占比的分母 */
+      grossAssets: number
+      /** 负债合计（绝对值），单独展示、不混入资产分母 */
+      totalLiabilities: number
+      /** 净资产 = grossAssets − totalLiabilities */
+      netWorth: number
       byClass: Record<string, number>
       byClassShare: Record<string, number>
       /** 该快照整体是否完整（无 stale / unavailable） */
@@ -104,11 +111,47 @@ export function compositionAtCapture(snapshot: Snapshot): CompositionResult {
    * 只累加**可靠且确有金额**的项。
    * V7 起 `valueCny` 可缺失（不可估值），必须显式处理而不是把 undefined 当 0。
    */
-  const totalCny = round2(
-    snapshot.positions
-      .filter((p) => p.reliable && p.valueCny !== undefined)
-      .reduce((s, p) => s + (p.valueCny ?? 0), 0),
+  /*
+   * ## 口径（Phase 8 / W8，P0-5）
+   *
+   * 三个量必须分清：
+   *
+   * | 量 | 定义 |
+   * | --- | --- |
+   * | **grossAssets** | 资产合计（**不含**负债） |
+   * | **totalLiabilities** | 负债合计（绝对值） |
+   * | **netWorth** | grossAssets − totalLiabilities |
+   *
+   * ### 修复了什么
+   *
+   * 原先 `totalCny` 把**全部**可靠持仓（含负债）加成正数，
+   * 于是有负债时出现 `totalCny = 1,300,000` 而 `netWorth = 700,000`，
+   * 资产类别占比的分母因此错误（实测现金被算成 76.9% 而非 100%）。
+   *
+   * ### 现在的规则
+   *
+   * - **资产类别占比以 grossAssets 为分母**（负债不属于「资产类别构成」）；
+   * - 负债单独汇总，不混进资产分母；
+   * - 若某条持仓**没有** `isLiabilityAtCapture`（v7 及以前的历史快照），
+   *   视为**资产** —— 这与当时的实现一致（v7 时负债判定存在缺陷，
+   *   不可能凭空补出一个负债标记；用 `assetClassAtCapture === 'liability'`
+   *   作为当年唯一的负债线索来还原，而不是猜测）。
+   */
+  const reliablePositions = snapshot.positions.filter(
+    (p) => p.reliable && p.valueCny !== undefined,
   )
+  /** 该条在**捕获当时**是否负债（历史快照用当时的类别兜底还原） */
+  const liabilityOf = (p: (typeof snapshot.positions)[number]): boolean =>
+    p.isLiabilityAtCapture ?? p.assetClassAtCapture === 'liability'
+
+  const grossAssets = round2(
+    reliablePositions.filter((p) => !liabilityOf(p)).reduce((s, p) => s + (p.valueCny ?? 0), 0),
+  )
+  const totalLiabilities = round2(
+    reliablePositions.filter((p) => liabilityOf(p)).reduce((s, p) => s + Math.abs(p.valueCny ?? 0), 0),
+  )
+  const netWorthCalc = round2(grossAssets - totalLiabilities)
+  const totalCny = grossAssets
   const isComplete = snapshot.isComplete ?? true
 
   if (snapshot.positions.length === 0) {
@@ -132,20 +175,33 @@ export function compositionAtCapture(snapshot: Snapshot): CompositionResult {
     }
   }
 
+  /*
+   * 资产类别构成：**只含资产**，负债单独成键（`liability`）。
+   * 占比分母固定为 `grossAssets`，因此 Σ(资产类占比) = 100%。
+   */
   const byClass: Record<string, number> = {}
-  for (const p of snapshot.positions) {
-    // 不可靠 / 缺金额的项不参与分类汇总（缺金额不得当 0）
-    if (!p.reliable || p.valueCny === undefined) continue
-    const cls = p.assetClassAtCapture as string
-    byClass[cls] = round2((byClass[cls] ?? 0) + p.valueCny)
+  for (const p of reliablePositions) {
+    const cls = liabilityOf(p) ? 'liability' : (p.assetClassAtCapture as string)
+    byClass[cls] = round2((byClass[cls] ?? 0) + Math.abs(p.valueCny ?? 0))
   }
 
   const byClassShare: Record<string, number> = {}
   for (const [k, v] of Object.entries(byClass)) {
-    byClassShare[k] = totalCny > 0 ? v / totalCny : 0
+    // 负债不参与「资产类别」分母；资产类以 grossAssets 为分母
+    byClassShare[k] = k === 'liability' ? 0 : grossAssets > 0 ? v / grossAssets : 0
   }
 
-  return { ok: true, date: snapshot.date, totalCny, byClass, byClassShare, isComplete }
+  return {
+    ok: true,
+    date: snapshot.date,
+    totalCny,
+    grossAssets,
+    totalLiabilities,
+    netWorth: netWorthCalc,
+    byClass,
+    byClassShare,
+    isComplete,
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -156,6 +212,15 @@ export interface TrendPoint {
   date: string
   /** 净资产（直接取快照值，不重算） */
   netWorth: number
+  /**
+   * 资产合计（**不含**负债）—— 资产类别占比的分母（W8）。
+   *
+   * 与 `netWorth` 的区别：有负债时 `grossAssets > netWorth`。
+   * 占比必须以 `grossAssets` 为分母，否则百分比会失真。
+   */
+  grossAssets?: number
+  /** 负债合计（W8）。负债单独展示，不混入资产分母 */
+  totalLiabilities?: number
   /** 快照来源（REAL / BACKFILLED / ESTIMATED / UNKNOWN） */
   captureKind: CaptureKind
   /** 来源文案，可直接展示 */
@@ -209,6 +274,8 @@ export function buildCompositionTrend(
       points.push({
         date: snap.date,
         netWorth: snap.netWorth,
+        grossAssets: comp.grossAssets,
+        totalLiabilities: comp.totalLiabilities,
         captureKind: snapshotCaptureKind(snap),
         captureKindLabel: CAPTURE_KIND_LABEL[snapshotCaptureKind(snap)],
         hasClassification: true,

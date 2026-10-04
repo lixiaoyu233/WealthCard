@@ -26,6 +26,18 @@ import {
   makeQuote,
   makeSnapshot,
 } from '../valuation/__fixtures__/builders'
+import { localDate } from './snapshot'
+
+/*
+ * W8 起 `captureSnapshot` 只允许创建**本地今天**的快照（过去/未来都拒绝），
+ * 因为估值使用当前持仓 + 最新行情 + 当前汇率，没有 as-of 能力。
+ *
+ * 因此测试日期必须与 `NOW` 落在**同一个本地日**：
+ *   D0 = NOW 的本地日（= 今天）→ 允许捕获
+ *   D1 = 次日                  → 用于「次日可重试」场景
+ */
+const D0 = localDate(new Date(NOW))
+const D1 = localDate(new Date(NOW + 86_400_000))
 
 /*
  * Phase 8 / W2 测试
@@ -319,11 +331,11 @@ describe('D 每日快照：幂等与崩溃一致性', () => {
     const { repo, db } = await createPairedTestStore(DB())
     await seed(repo)
 
-    const r = await ensureDailySnapshot(repo, { now: NOW, date: '2026-10-04' })
+    const r = await ensureDailySnapshot(repo, { now: NOW, date: D0 })
     expect(r.action).toBe('captured')
     expect(await repo.snapshots.count()).toBe(1)
 
-    const attempt = await readSnapshotAttempt(repo, '2026-10-04')
+    const attempt = await readSnapshotAttempt(repo, D0)
     expect(attempt?.status).toBe('success')
     await db.delete()
   })
@@ -331,18 +343,28 @@ describe('D 每日快照：幂等与崩溃一致性', () => {
   it('② 同一天再次打开 → 不创建第二个', async () => {
     const { repo, db } = await createPairedTestStore(DB())
     await seed(repo)
-    await ensureDailySnapshot(repo, { now: NOW, date: '2026-10-04' })
+    const first = await ensureDailySnapshot(repo, { now: NOW, date: D0 })
+    expect(first.action).toBe('captured')
 
-    const again = await ensureDailySnapshot(repo, { now: NOW + 1000, date: '2026-10-04' })
-    expect(again.action).toBe('already-captured')
+    /*
+     * W7 起当日快照**允许刷新**（否则当天录入/作废后曲线不更新，
+     * 而首页仍显示「今日快照：已生成」）。刷新是同日 upsert：
+     * 记录数不变、id 不变，只更新内容。
+     */
+    const again = await ensureDailySnapshot(repo, { now: NOW + 1000, date: D0 })
+    expect(again.action).toBe('recaptured')
     expect(await repo.snapshots.count()).toBe(1)
+    if (first.action === 'captured' && again.action === 'recaptured') {
+      expect(again.snapshot.id).toBe(first.snapshot.id)
+      expect(again.snapshot.createdAt).toBe(first.snapshot.createdAt)
+    }
     await db.delete()
   })
 
   it('③ 快照存在但 attempt 缺失 → 补 success（崩溃恢复）', async () => {
     const { repo, db } = await createPairedTestStore(DB())
     await seed(repo)
-    await ensureDailySnapshot(repo, { now: NOW, date: '2026-10-04' })
+    await ensureDailySnapshot(repo, { now: NOW, date: D0 })
 
     /*
      * 模拟「快照已写入、attempt 尚未写入就崩溃」。
@@ -351,13 +373,13 @@ describe('D 每日快照：幂等与崩溃一致性', () => {
      * 补记 success 并返回 already-captured（**不重算**），
      * 区别于「当天正常生成过（attempt=success）→ 需要刷新跟上后续录入」。
      */
-    await repo.metaKv.remove(snapshotAttemptKey('2026-10-04'))
-    expect(await readSnapshotAttempt(repo, '2026-10-04')).toBeUndefined()
+    await repo.metaKv.remove(snapshotAttemptKey(D0))
+    expect(await readSnapshotAttempt(repo, D0)).toBeUndefined()
 
-    const r = await ensureDailySnapshot(repo, { now: NOW + 2000, date: '2026-10-04' })
+    const r = await ensureDailySnapshot(repo, { now: NOW + 2000, date: D0 })
     expect(r.action).toBe('already-captured')
     if (r.action === 'already-captured') expect(r.recoveredAttempt).toBe(true)
-    expect((await readSnapshotAttempt(repo, '2026-10-04'))?.status).toBe('success')
+    expect((await readSnapshotAttempt(repo, D0))?.status).toBe('success')
     // 没有创建第二份
     expect(await repo.snapshots.count()).toBe(1)
     await db.delete()
@@ -367,11 +389,11 @@ describe('D 每日快照：幂等与崩溃一致性', () => {
     const { repo, db } = await createPairedTestStore(DB())
     await seed(repo)
     // 预置一条 failed attempt（模拟第一次尝试失败）
-    await repo.metaKv.set(snapshotAttemptKey('2026-10-04'), {
-      date: '2026-10-04', attemptedAt: new Date(NOW).toISOString(), status: 'failed', error: '模拟失败',
+    await repo.metaKv.set(snapshotAttemptKey(D0), {
+      date: D0, attemptedAt: new Date(NOW).toISOString(), status: 'failed', error: '模拟失败',
     })
 
-    const r = await ensureDailySnapshot(repo, { now: NOW, date: '2026-10-04' })
+    const r = await ensureDailySnapshot(repo, { now: NOW, date: D0 })
     expect(r.action).toBe('attempted-failed')
     expect(await repo.snapshots.count()).toBe(0) // 没有创建
     await db.delete()
@@ -380,14 +402,14 @@ describe('D 每日快照：幂等与崩溃一致性', () => {
   it('⑤ 第二天 → 允许重新尝试', async () => {
     const { repo, db } = await createPairedTestStore(DB())
     await seed(repo)
-    await repo.metaKv.set(snapshotAttemptKey('2026-10-04'), {
-      date: '2026-10-04', attemptedAt: new Date(NOW).toISOString(), status: 'failed', error: 'x',
+    await repo.metaKv.set(snapshotAttemptKey(D0), {
+      date: D0, attemptedAt: new Date(NOW).toISOString(), status: 'failed', error: 'x',
     })
 
     // 同一天不重试
-    expect((await ensureDailySnapshot(repo, { now: NOW, date: '2026-10-04' })).action).toBe('attempted-failed')
+    expect((await ensureDailySnapshot(repo, { now: NOW, date: D0 })).action).toBe('attempted-failed')
     // 第二天正常创建
-    const next = await ensureDailySnapshot(repo, { now: NOW + 86400000, date: '2026-10-05' })
+    const next = await ensureDailySnapshot(repo, { now: NOW + 86_400_000, date: D1 })
     expect(next.action).toBe('captured')
     expect(await repo.snapshots.count()).toBe(1)
     await db.delete()
@@ -403,19 +425,19 @@ describe('D 每日快照：幂等与崩溃一致性', () => {
         throw new Error('模拟仓储故障')
       },
     }
-    const r = await ensureDailySnapshot(broken, { now: NOW, date: '2026-10-04' })
+    const r = await ensureDailySnapshot(broken, { now: NOW, date: D0 })
     expect(r.action).toBe('capture-failed')
     if (r.action === 'capture-failed') expect(r.error).toContain('模拟仓储故障')
     // 失败被记录，当天不再重试
-    expect((await ensureDailySnapshot(broken, { now: NOW, date: '2026-10-04' })).action).toBe('attempted-failed')
+    expect((await ensureDailySnapshot(broken, { now: NOW, date: D0 })).action).toBe('attempted-failed')
   })
 
   it('每天最多一个 REAL 快照（并发重复调用也只有一个）', async () => {
     const { repo, db } = await createPairedTestStore(DB())
     await seed(repo)
     await Promise.all([
-      ensureDailySnapshot(repo, { now: NOW, date: '2026-10-04' }),
-      ensureDailySnapshot(repo, { now: NOW, date: '2026-10-04' }),
+      ensureDailySnapshot(repo, { now: NOW, date: D0 }),
+      ensureDailySnapshot(repo, { now: NOW, date: D0 }),
     ])
     // 允许并发下都尝试一次，但数据库唯一索引保证只有一条
     expect(await repo.snapshots.count()).toBe(1)
@@ -425,9 +447,9 @@ describe('D 每日快照：幂等与崩溃一致性', () => {
   it('不做自动 backfill：只捕获指定日期，不生成其他日期', async () => {
     const { repo, db } = await createPairedTestStore(DB())
     await seed(repo)
-    await ensureDailySnapshot(repo, { now: NOW, date: '2026-10-04' })
+    await ensureDailySnapshot(repo, { now: NOW, date: D0 })
     const all = await repo.snapshots.getAll()
-    expect(all.map((s) => s.date)).toEqual(['2026-10-04'])
+    expect(all.map((s) => s.date)).toEqual([D0])
     await db.delete()
   })
 
@@ -436,7 +458,7 @@ describe('D 每日快照：幂等与崩溃一致性', () => {
     await repo.metaKv.set(snapshotAttemptKey('2026-01-01'), { date: '2026-01-01', attemptedAt: 'x', status: 'failed' })
     await repo.metaKv.set(snapshotAttemptKey('2026-10-03'), { date: '2026-10-03', attemptedAt: 'x', status: 'success' })
 
-    const removed = await pruneOldAttempts(repo, '2026-10-04', ATTEMPT_RETENTION_DAYS)
+    const removed = await pruneOldAttempts(repo, D0, ATTEMPT_RETENTION_DAYS)
     expect(removed).toBe(1)
     expect(await readSnapshotAttempt(repo, '2026-01-01')).toBeUndefined()
     expect(await readSnapshotAttempt(repo, '2026-10-03')).toBeDefined()
