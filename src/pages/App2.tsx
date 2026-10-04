@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Home, Layers } from 'lucide-react'
 import { usePortfolio2 } from '../hooks/usePortfolio2'
+import { createDexieRepository } from '../lib/db/dexieRepository'
 import HomePage from './HomePage'
 import AssetsPage from './AssetsPage'
 
@@ -25,7 +26,8 @@ export type W2Tab = 'home' | 'assets'
 
 export default function App2({ initialTab = 'home' }: { initialTab?: W2Tab }) {
   const [tab, setTab] = useState<W2Tab>(initialTab)
-  const { data, loading, error, daily, reload } = usePortfolio2()
+  const repo = useMemo(() => createDexieRepository(), [])
+  const { data, loading, error, daily, reload } = usePortfolio2(repo)
 
   return (
     <div className="min-h-screen bg-app">
@@ -58,6 +60,8 @@ export default function App2({ initialTab = 'home' }: { initialTab?: W2Tab }) {
             portfolio={data.portfolio}
             analysis={data.analysis}
             results={data.results}
+            repo={repo}
+            onChanged={() => void reload()}
           />
         ) : (
           <p className="mx-auto max-w-[480px] px-4 pt-8 text-[12px] text-ink4">

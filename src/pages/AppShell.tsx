@@ -1,0 +1,192 @@
+import { useCallback, useEffect, useState } from 'react'
+import { Home, Layers, PieChart, TrendingUp, Settings as SettingsIcon } from 'lucide-react'
+import { useMemo } from 'react'
+import { usePortfolio2 } from '../hooks/usePortfolio2'
+import { createDexieRepository } from '../lib/db/dexieRepository'
+import type { PortfolioRepository } from '../lib/db/repository'
+import HomePage from './HomePage'
+import AssetsPage from './AssetsPage'
+import AnalysisTab from './AnalysisTab'
+import HistoryTab from './HistoryTab'
+import SettingsTab from './SettingsTab'
+
+/**
+ * W3 正式应用外壳
+ *
+ * ## 架构
+ *
+ * ```
+ * Repository → Holdings → Valuation → Analysis → Snapshot/History
+ *                          ↓
+ *                   usePortfolio2（取数 + 派生一次）
+ *                          ↓
+ *               AppShell（Tab 路由）→ 各 Tab 组件
+ * ```
+ *
+ * Tab 组件**只消费派生结果**，不自行计算金融事实；
+ * 所有业务操作必须经 `Repository` / Domain API 后触发 `reload()` 重新派生。
+ *
+ * ## 五个 Tab
+ *
+ * | Tab | 数据来源 | 是否可写 |
+ * | --- | --- | --- |
+ * | 首页 | `totals` + `analysis` | 只读 |
+ * | 资产 | `analysis` 六维度 | 可通过 Sheet 修改 Instrument metadata |
+ * | 分析 | `analysis` | 只读 |
+ * | 历史 | `trend`（Snapshot） | 只读 |
+ * | 设置 | 本地 UI 偏好 + 数据说明 | 仅 UI 偏好 |
+ */
+export type AppTab = 'home' | 'assets' | 'analysis' | 'history' | 'settings'
+
+export const TAB_LABEL: Record<AppTab, string> = {
+  home: '首页',
+  assets: '资产',
+  analysis: '分析',
+  history: '历史',
+  settings: '设置',
+}
+
+const TAB_ICON: Record<AppTab, typeof Home> = {
+  home: Home,
+  assets: Layers,
+  analysis: PieChart,
+  history: TrendingUp,
+  settings: SettingsIcon,
+}
+
+/** 记住上次所在 Tab（纯 UI 偏好，允许写 localStorage） */
+const TAB_PREF_KEY = 'wealthcard/ui/active-tab'
+
+function readTabPref(): AppTab {
+  try {
+    const raw = localStorage.getItem(TAB_PREF_KEY)
+    if (raw && raw in TAB_LABEL) return raw as AppTab
+  } catch {
+    /* 忽略：偏好读取失败不影响使用 */
+  }
+  return 'home'
+}
+
+function writeTabPref(tab: AppTab): void {
+  try {
+    // 仅 UI 偏好，不属于业务事实
+    localStorage.setItem(TAB_PREF_KEY, tab)
+  } catch {
+    /* 忽略 */
+  }
+}
+
+export default function AppShell({
+  initialTab,
+  repo,
+}: {
+  initialTab?: AppTab
+  repo?: PortfolioRepository
+}) {
+  const [tab, setTab] = useState<AppTab>(initialTab ?? readTabPref())
+  // 仓储只建一次，并向所有子组件注入同一实例（避免读写不同实例）
+  const activeRepo = useMemo(() => repo ?? createDexieRepository(), [repo])
+  const { data, loading, error, daily, reload } = usePortfolio2(activeRepo)
+
+  useEffect(() => {
+    writeTabPref(tab)
+  }, [tab])
+
+  /**
+   * 业务操作完成后重新派生。
+   *
+   * 关键：**任何** 写入都必须走这里刷新，而不是在组件内直接改派生结果 ——
+   * 派生结果（AnalysisView / totals / trend）一律由 Repository 重新读取后重算。
+   */
+  const handleChanged = useCallback(() => {
+    void reload()
+  }, [reload])
+
+  return (
+    <div className="min-h-screen bg-app">
+      {/* 顶部留白：内容区避开状态栏；底部给导航留出空间 */}
+      <div className="safe-top pb-20">
+        {error ? (
+          <div className="mx-auto max-w-[480px] px-4 pt-4 text-[12px] tone-warn">
+            读取数据失败：{error}
+          </div>
+        ) : null}
+
+        {!data ? (
+          <p className="mx-auto max-w-[480px] px-4 pt-10 text-[12px] text-ink4">
+            {loading ? '正在读取数据…' : '暂无数据'}
+          </p>
+        ) : tab === 'home' ? (
+          <HomePage
+            totals={data.totals}
+            analysis={data.analysis}
+            duplicates={data.duplicates}
+            daily={daily}
+            loadedAt={data.loadedAt}
+            loading={loading}
+            error={error}
+            onReload={() => void reload()}
+          />
+        ) : tab === 'assets' ? (
+          <AssetsPage
+            portfolio={data.portfolio}
+            analysis={data.analysis}
+            results={data.results}
+            repo={activeRepo}
+            onChanged={handleChanged}
+          />
+        ) : tab === 'analysis' ? (
+          <AnalysisTab analysis={data.analysis} duplicates={data.duplicates} />
+        ) : tab === 'history' ? (
+          <HistoryTab trend={data.trend} />
+        ) : (
+          <SettingsTab
+            portfolio={data.portfolio}
+            analysis={data.analysis}
+            repo={activeRepo}
+            onChanged={handleChanged}
+          />
+        )}
+      </div>
+
+      {/* 底部导航 */}
+      <nav
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-s1"
+        style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+        data-testid="bottom-nav"
+      >
+        <div className="mx-auto flex max-w-[480px]">
+          {(Object.keys(TAB_LABEL) as AppTab[]).map((key) => {
+            const Icon = TAB_ICON[key]
+            const badge =
+              key === 'assets' && data && !data.duplicates.ok
+                ? '!'
+                : key === 'assets' && data && data.analysis.coverage.unconfirmedCount > 0
+                  ? '?'
+                  : null
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setTab(key)}
+                className={`relative flex flex-1 flex-col items-center gap-0.5 py-2.5 text-[11px] ${
+                  tab === key ? 'text-ink' : 'text-ink4'
+                }`}
+                data-testid={`nav-${key}`}
+                aria-current={tab === key ? 'page' : undefined}
+              >
+                <Icon size={16} />
+                {TAB_LABEL[key]}
+                {badge ? (
+                  <span className="absolute right-1/4 top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-warn/20 text-[9px] tone-warn">
+                    {badge}
+                  </span>
+                ) : null}
+              </button>
+            )
+          })}
+        </div>
+      </nav>
+    </div>
+  )
+}

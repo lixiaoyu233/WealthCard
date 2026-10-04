@@ -1,4 +1,4 @@
-import { AlertTriangle, Lock, RefreshCw, TriangleAlert } from 'lucide-react'
+import { AlertTriangle, RefreshCw, ShieldCheck, TriangleAlert } from 'lucide-react'
 import type { AnalysisView } from '../lib/analysis'
 import type { PortfolioTotals } from '../lib/valuation/types'
 import type { DailySnapshotOutcome } from '../lib/performance/dailySnapshot'
@@ -108,9 +108,10 @@ export default function HomePage({
 
       {/* 只读提示 */}
       <div className="mt-3 flex items-start gap-2 rounded-2xl border border-line bg-s2 px-3.5 py-2.5 text-[12px] text-ink2">
-        <Lock size={14} className="mt-0.5 shrink-0 text-ink3" />
+        <ShieldCheck size={14} className="mt-0.5 shrink-0 text-ink3" />
         <span>
-          W2 只读视图 · 数据来自 IndexedDB，与旧版 localStorage 无关。
+          数据来自 IndexedDB（本机），与旧版 localStorage 无关。
+          资产操作均在「资产」页进行，所有写入经 Repository 后重新派生。
         </span>
       </div>
 

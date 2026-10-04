@@ -1,7 +1,13 @@
 import { useMemo, useState } from 'react'
+import { AlertTriangle, BadgeCheck, Coins } from 'lucide-react'
 import type { Portfolio2 } from '../types/portfolio2'
 import type { AnalysisView } from '../lib/analysis'
 import type { ValuationResult } from '../lib/valuation/types'
+import type { PortfolioRepository } from '../lib/db/repository'
+import { detectDuplicateHoldings } from '../lib/ledger/duplicates'
+import ClassifySheet from '../components/ClassifySheet'
+import CashConvertSheet from '../components/CashConvertSheet'
+import DuplicateSheet from '../components/DuplicateSheet'
 import {
   ACCOUNT_TYPE_LABEL,
   ASSET_CLASS_LABEL,
@@ -34,6 +40,10 @@ export interface AssetsPageProps {
   portfolio: Portfolio2
   analysis: AnalysisView
   results: ValuationResult[]
+  /** 业务操作必须经 Repository；**不允许**组件直接改派生数据 */
+  repo: PortfolioRepository
+  /** 业务操作完成后重新派生 */
+  onChanged: () => void
   region?: string
   onRegionChange?: (next: string) => void
 }
@@ -77,10 +87,30 @@ export default function AssetsPage({
   portfolio,
   analysis,
   results,
+  repo,
+  onChanged,
   region,
   onRegionChange,
 }: AssetsPageProps) {
   const [dimension, setDimension] = useState<AssetDimension>('holdings')
+  const [classifyOpen, setClassifyOpen] = useState(false)
+  const [classifyFor, setClassifyFor] = useState<string[] | undefined>(undefined)
+  const [cashOpen, setCashOpen] = useState(false)
+  const [dupOpen, setDupOpen] = useState(false)
+
+  const duplicates = useMemo(() => detectDuplicateHoldings(portfolio), [portfolio])
+  const unconfirmedCount = analysis.coverage.unconfirmedCount
+
+  /** 可转换的现金：已确认现金 + 手动口径 */
+  const cashCandidates = useMemo(() => {
+    const byId = new Map(portfolio.instruments.map((i) => [i.id, i]))
+    return portfolio.holdings.filter((h) => {
+      if (h.valuationMode !== 'manual') return false
+      const inst = byId.get(h.instrumentId)
+      if (!inst) return false
+      return (inst.instrumentType === 'cash' || inst.assetClass === 'cash') && inst.classificationStatus === 'confirmed'
+    }).length
+  }, [portfolio.holdings, portfolio.instruments])
 
   const resultByHolding = useMemo(
     () => new Map(results.map((r) => [r.holdingId, r])),
@@ -115,6 +145,56 @@ export default function AssetsPage({
 
   return (
     <div className="mx-auto w-full max-w-[480px] px-4 pb-24">
+      {/* 业务操作入口 —— 全部走 Repository / Domain API */}
+      <section className="mt-4 space-y-2" data-testid="asset-actions">
+        <button
+          type="button"
+          onClick={() => {
+            setClassifyFor(undefined)
+            setClassifyOpen(true)
+          }}
+          className="flex w-full items-center gap-2 rounded-2xl border border-line bg-s1 px-3.5 py-2.5 text-left text-[12px] text-ink2"
+          data-testid="action-classify"
+        >
+          <BadgeCheck size={14} className="shrink-0 text-ink3" />
+          <span className="flex-1">
+            确认资产分类
+            {unconfirmedCount > 0 ? (
+              <span className="ml-1.5 tone-warn">{unconfirmedCount} 项待确认</span>
+            ) : (
+              <span className="ml-1.5 text-ink4">全部已确认</span>
+            )}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setCashOpen(true)}
+          className="flex w-full items-center gap-2 rounded-2xl border border-line bg-s1 px-3.5 py-2.5 text-left text-[12px] text-ink2"
+          data-testid="action-cash"
+        >
+          <Coins size={14} className="shrink-0 text-ink3" />
+          <span className="flex-1">
+            转为交易驱动现金
+            <span className="ml-1.5 text-ink4">{cashCandidates} 项可转换</span>
+          </span>
+        </button>
+
+        {!duplicates.ok ? (
+          <button
+            type="button"
+            onClick={() => setDupOpen(true)}
+            className="flex w-full items-center gap-2 rounded-2xl border border-warn/25 bg-warn/10 px-3.5 py-2.5 text-left text-[12px] tone-warn"
+            data-testid="action-duplicates"
+          >
+            <AlertTriangle size={14} className="shrink-0" />
+            <span className="flex-1">
+              发现 {duplicates.duplicates.length} 组重复持仓 · 查看详情
+            </span>
+          </button>
+        ) : null}
+      </section>
+
       {/* 维度切换 */}
       <div className="mt-4 flex flex-wrap gap-1.5" data-testid="dimension-tabs">
         {(Object.keys(DIMENSION_LABEL) as AssetDimension[]).map((d) => (
@@ -228,6 +308,19 @@ export default function AssetsPage({
                       <div className="mt-1">
                         <StatusBadge result={result} />
                       </div>
+                      {!row.classConfirmed ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setClassifyFor([row.instrumentId])
+                            setClassifyOpen(true)
+                          }}
+                          className="mt-1 rounded border border-line px-1.5 py-0.5 text-[10px] text-ink3"
+                          data-testid="row-classify"
+                        >
+                          确认分类
+                        </button>
+                      ) : null}
                     </div>
                   </div>
 
@@ -253,6 +346,30 @@ export default function AssetsPage({
       {onRegionChange && region !== undefined ? (
         <p className="mt-1 px-1 text-[11px] text-ink4">当前地区筛选：{region || '全部'}</p>
       ) : null}
+
+      {classifyOpen ? (
+        <ClassifySheet
+          open
+          onClose={() => setClassifyOpen(false)}
+          portfolio={portfolio}
+          analysis={analysis}
+          repo={repo}
+          onChanged={onChanged}
+          instrumentIds={classifyFor}
+        />
+      ) : null}
+
+      {cashOpen ? (
+        <CashConvertSheet
+          open
+          onClose={() => setCashOpen(false)}
+          portfolio={portfolio}
+          repo={repo}
+          onChanged={onChanged}
+        />
+      ) : null}
+
+      {dupOpen ? <DuplicateSheet duplicates={duplicates} onClose={() => setDupOpen(false)} /> : null}
     </div>
   )
 }

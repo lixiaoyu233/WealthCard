@@ -21,11 +21,10 @@
  * W2 直接消费 2.0 的 `Portfolio2` + `AnalysisView`，避免多一层投影带来的口径漂移。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Portfolio2 } from '../types/portfolio2'
 import { createEmptyPortfolio2 } from '../types/portfolio2'
 import type { PortfolioRepository } from '../lib/db/repository'
-import { createDexieRepository } from '../lib/db/dexieRepository'
 import { calculateTotals, valuateHolding } from '../lib/valuation/engine'
 import { createFxTable } from '../lib/valuation/fx'
 import type { PortfolioTotals, ValuationResult } from '../lib/valuation/types'
@@ -81,11 +80,15 @@ export async function loadPortfolio2(
   }
 }
 
-export function usePortfolio2(repo?: PortfolioRepository): UsePortfolio2State {
-  // 仓储只建一次；调用方也可注入（测试用内存实现）
-  const repoRef = useRef<PortfolioRepository | null>(repo ?? null)
-  if (!repoRef.current) repoRef.current = createDexieRepository()
-  const activeRepo = repoRef.current
+export function usePortfolio2(repo: PortfolioRepository): UsePortfolio2State {
+  /*
+   * 仓储由调用方注入，**不在内部静默新建**。
+   *
+   * 原因：如果 hook 自己建一个实例，而上层组件用另一个实例写数据，
+   * 就会出现「写入 A 实例、读取 B 实例」的不一致（W1 已踩过同类坑：
+   * migrateOnStart 曾在 repo 与 db 不同库时误判「已迁移」）。
+   */
+  const activeRepo = repo
 
   const [data, setData] = useState<Portfolio2Snapshot | null>(null)
   const [loading, setLoading] = useState(true)
