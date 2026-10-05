@@ -300,6 +300,34 @@ export async function createManualHolding(
     }
   }
 
+  /*
+   * ## 不得与「交易驱动」的持仓冲突（W11 Blocker Patch，P0-1）
+   *
+   * 持仓表不变量：一个 `(账户, 标的)` 只能有一条持仓。
+   *
+   * 若该 key 上的持仓由交易所驱动（`valuationMode !== 'manual'`），
+   * 再建一条手动持仓就会产生同 key 的第二条 → `duplicate-holding`
+   * → **该账户从此无法再记账**（且应用内无修复入口）。
+   *
+   * 因此在创建前明确拒绝，并告诉用户可行做法。**不静默改动那条持仓**。
+   */
+  const drivingHolding = portfolio.holdings.find(
+    (h) =>
+      h.accountId === input.accountId &&
+      h.instrumentId === input.instrumentId &&
+      h.valuationMode !== 'manual',
+  )
+  if (drivingHolding) {
+    return {
+      ok: false,
+      code: 'duplicate',
+      message:
+        `该账户下「${instrument.name}」已经由交易记录驱动（数量口径）。` +
+        '同一账户的同一标的只能有一条持仓记录 —— ' +
+        '若这笔资产与那笔交易不是同一份，请为它单独建一个账户后登记。',
+    }
+  }
+
   const existing = portfolio.holdings.find(
     (h) => h.accountId === input.accountId && h.instrumentId === input.instrumentId,
   )

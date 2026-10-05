@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Home, Layers, PieChart, Plus, TrendingUp, Settings as SettingsIcon } from 'lucide-react'
 import { useMemo } from 'react'
 import { usePortfolio2 } from '../hooks/usePortfolio2'
+import { needsMigrationAttention, startupMigrationStatus } from '../lib/readOnly'
 import { ensureDailySnapshot } from '../lib/performance/dailySnapshot'
 import { createDexieRepository } from '../lib/db/dexieRepository'
 import type { PortfolioRepository } from '../lib/db/repository'
@@ -127,10 +128,45 @@ export default function AppShell({
     })()
   }, [reload, activeRepo])
 
+  /*
+   * 启动迁移状态（W11 Blocker Patch，P1-6）。
+   * `main.tsx` 在启动编排后写入；这里读取并在 UI 上明确展示。
+   */
+  const migrationStatus = startupMigrationStatus()
+  const migrationNotice = needsMigrationAttention(migrationStatus) ? migrationStatus : null
+
   return (
     <div className="min-h-screen bg-app">
       {/* 顶部留白：内容区避开状态栏；底部给导航留出空间 */}
       <div className="safe-top pb-20">
+        {/*
+          旧版数据迁移未成功 / 未完成时必须**明确提示**（W11 Blocker Patch，P1-6）。
+          否则 1.0 用户只看到空应用 + 冷启动引导，会误以为数据丢了，
+          也可能把「空库」当成正常状态。
+        */}
+        {migrationNotice ? (
+          <div
+            className="mx-auto mt-3 max-w-[480px] rounded-2xl border border-warn/30 bg-warn/10 px-3.5 py-2.5 text-[12px] leading-relaxed tone-warn"
+            data-testid="migration-notice"
+          >
+            <p className="font-medium">旧版本数据没有完成迁移</p>
+            <p className="mt-1 text-ink2">
+              你的旧版本资产数据仍然完整保存在本机，没有被删除，也没有被改动。
+              下面这个界面里暂时看不到它们。
+            </p>
+            <p className="mt-1 text-ink2">
+              这里显示的是 2.0 的数据存储。请先不要把它当成空库使用 ——
+              在迁移问题处理之前新建数据，会让旧数据更难恢复。
+            </p>
+            {migrationNotice.reason ? (
+              <p className="mt-1 text-[11px] text-ink4">原因：{migrationNotice.reason}</p>
+            ) : null}
+            <p className="mt-1 text-[11px] text-ink4">
+              可用 ?legacy=1 打开旧界面只读查看原有数据，或先导出一份 2.0 备份再处理。
+            </p>
+          </div>
+        ) : null}
+
         {error ? (
           <div className="mx-auto max-w-[480px] px-4 pt-4 text-[12px] tone-warn">
             读取数据失败：{error}

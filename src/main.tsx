@@ -7,6 +7,7 @@ import { migrateOnStart } from './lib/db/migrateOnStart'
 import { createDexieRepository } from './lib/db/dexieRepository'
 import { getDb, requestPersistentStorage } from './lib/db/dexie'
 import { setPreloadedLegacyView, toLegacyView } from './lib/db/toLegacyView'
+import { setStartupMigrationStatus } from './lib/readOnly'
 import { resolveView } from './lib/viewRouting'
 import './index.css'
 
@@ -64,6 +65,14 @@ async function bootstrap(): Promise<void> {
     const db = getDb()
     repo = createDexieRepository(db)
     const result = await migrateOnStart({ repo, db })
+    /*
+     * 把迁移状态交给正式 2.0 UI（W11 Blocker Patch，P1-6）。
+     *
+     * 以前这里只用了 `result.readOnly`，`status` / `reason` 全部丢弃 ——
+     * 迁移失败时用户只看得到一个「空应用 + 冷启动引导」，
+     * 会以为 1.0 数据丢了，也不知道迁移其实没有成功。
+     */
+    setStartupMigrationStatus({ status: result.status, reason: result.reason })
 
     /*
      * 只读模式下的读路径（旧 UI 专用）：
@@ -77,6 +86,10 @@ async function bootstrap(): Promise<void> {
   } catch (e) {
     // 迁移编排本身不应抛出；这里只是最后一道保险，绝不阻断渲染
     console.warn('[wealthcard] 启动迁移失败，将以 1.0 行为继续运行：', e)
+    setStartupMigrationStatus({
+      status: 'failed',
+      reason: e instanceof Error ? e.message : '启动迁移出现未知异常',
+    })
   }
 
   const container = document.getElementById('root')

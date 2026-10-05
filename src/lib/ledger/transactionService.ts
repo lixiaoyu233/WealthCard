@@ -430,6 +430,23 @@ export async function recordTransaction(
     return { ok: false, code: 'duplicate-holding', message: dup.summary }
   }
 
+  /*
+   * ## 前置校验：不得与**手动持仓**在同一 (账户, 标的) 上冲突
+   * （W11 Blocker Patch，P0-1）
+   *
+   * 手动持仓与交易派生持仓是两套事实来源，而持仓表的不变量是
+   * 「一个 (账户, 标的) 只能有一条」（见 `duplicates.ts` 的 `buildSuggestion`：
+   * 口径不一致属数据质量问题，必须由用户消解）。
+   *
+   * 若该 key 上已有 `valuationMode: 'manual'` 的持仓，这笔交易会产生
+   * 同 key 的第二条 → 触发 `duplicate-holding` → **该账户从此无法再记账**，
+   * 且应用内没有修复入口。
+   *
+   * 因此在写入前明确拒绝，并告诉用户怎么做 —— 不静默合并、不丢弃手动值。
+   */
+  const manualConflict = findManualHoldingConflict(withTx, tx)
+  if (manualConflict) return manualConflict
+
   /* ---- 7) 从 Ledger 重建持仓缓存 ---- */
   const rebuilt = rebuildHoldingsFromTransactions(withTx)
   if (rebuilt.blocked) {
@@ -466,6 +483,50 @@ export async function recordTransaction(
     },
     reconcile: { ok: rec.ok, matchedCount: rec.matchedCount, holdingCount: rec.holdingCount },
   }
+}
+
+
+/**
+ * 检查这笔交易会不会与**手动持仓**在同一 `(accountId, instrumentId)` 上冲突。
+ *
+ * 返回 `null` 表示无冲突；否则返回可直接返回给 UI 的失败结果。
+ */
+function findManualHoldingConflict(
+  portfolio: Portfolio2,
+  tx: Transaction,
+): RecordFailure | null {
+  const manualKeys = new Set(
+    portfolio.holdings
+      .filter((h) => h.valuationMode === 'manual')
+      .map((h) => positionKey(h.accountId, h.instrumentId)),
+  )
+  if (manualKeys.size === 0) return null
+
+  // 该交易可能触及的键：投资腿、资金腿、划转/换汇的目标侧
+  const touched = new Set<string>()
+  if (tx.accountId && tx.instrumentId) touched.add(positionKey(tx.accountId, tx.instrumentId))
+  if (tx.accountId && tx.cashInstrumentId) touched.add(positionKey(tx.accountId, tx.cashInstrumentId))
+  if (tx.toAccountId && tx.instrumentId) touched.add(positionKey(tx.toAccountId, tx.instrumentId))
+  if (tx.toAccountId && tx.toCashInstrumentId) {
+    touched.add(positionKey(tx.toAccountId, tx.toCashInstrumentId))
+  }
+
+  for (const key of touched) {
+    if (!manualKeys.has(key)) continue
+    const [accountId, instrumentId] = key.split('::')
+    const account = portfolio.accounts.find((a) => a.id === accountId)
+    const instrument = portfolio.instruments.find((i) => i.id === instrumentId)
+    return {
+      ok: false,
+      code: 'duplicate-holding',
+      message:
+        `「${account?.name ?? accountId}」下的「${instrument?.name ?? instrumentId}」` +
+        '已经有一条手动持仓。同一账户的同一标的只能有一条持仓记录 —— ' +
+        '若要改用交易记录这个标的，请换一个账户，' +
+        '或先处理掉那条手动持仓再重试。',
+    }
+  }
+  return null
 }
 
 /* ------------------------------------------------------------------ *
@@ -830,7 +891,23 @@ export async function voidTransaction(
       message: rebuilt.duplicateReport?.summary ?? '重建被阻断：存在重复持仓',
     }
   }
-  const next: Portfolio2 = { ...pruned, holdings: rebuilt.holdings }
+      /*
+     * 重建产物的最终不变量校验（W11 Blocker Patch，P0-1）。
+     *
+     * 入口的重复检测查的是**重建前**的组合，不会覆盖重建新产生的行。
+     * 若重建自身产出重复 `(accountId, instrumentId)`，必须**拒绝写入**
+     * 而不是把重复静默持久化 —— 那会让该账户从此无法再记账。
+     */
+    if (rebuilt.duplicateKeys?.length) {
+      return {
+        ok: false,
+        code: 'duplicate-holding',
+        message:
+          `重建持仓出现重复键（${rebuilt.duplicateKeys.join('、')}），已拒绝写入以避免损坏账本。` +
+          '请导出备份后反馈该问题。',
+      }
+    }
+    const next: Portfolio2 = { ...pruned, holdings: rebuilt.holdings }
 
   /* ---- 9) 账实校验 ---- */
   const rec = reconcileHoldings(next)

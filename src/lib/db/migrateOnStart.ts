@@ -163,7 +163,18 @@ export function strategySettingsToProfiles(
  * ------------------------------------------------------------------ */
 
 export interface StartupResult {
-  status: 'migrated' | 'skipped' | 'no-legacy' | 'failed' | 'unavailable'
+  status:
+      | 'migrated'
+      | 'skipped'
+      | 'no-legacy'
+      /**
+       * `incomplete`：旧版数据尚未迁移完成，但 IndexedDB 里已有部分数据
+       * （上次迁移中断/失败后用户又建了东西）。
+       * ⚠️ 必须让用户看到 —— 绝不能当作 `skipped`（那会让迁移闸门永久关闭）。
+       */
+      | 'incomplete'
+      | 'failed'
+      | 'unavailable'
   /** 是否开启了只读模式 */
   readOnly: boolean
   reason?: string
@@ -216,10 +227,45 @@ export async function migrateOnStart(options: {
       return { status: 'skipped', readOnly: true, reason: '已迁移过' }
     }
 
-    /* ---- 2) 已有 2.0 数据：跳过（幂等） ---- */
+    /*
+     * ---- 2) 是否**已经迁移完成**：以 migration meta 为准 ----
+     *
+     * ## 为什么不能再看账户/标的计数（W11 Blocker Patch，P1-6）
+     *
+     * 原实现是 `existing.instruments > 0 || existing.accounts > 0` → 跳过。
+     * 问题：用户在**迁移失败**后进入 2.0 空态、随手建了一个账户，
+     * 下次启动就会命中该条件 → 迁移闸门**永久关闭**，
+     * 他的 1.0 资产（仍在 localStorage）**再也不会被导入**，
+     * 且应用内没有任何入口重开。
+     *
+     * 现在改为读 `meta` 的 `appliedMigrations` 与迁移日志 ——
+     * 只有**确实迁移成功过**才跳过。
+     */
+    const gateStore = createDexieMigrationStore(options.repo, options.db)
+    const startupMeta = await gateStore.readMeta()
+    const migrationCompleted =
+      startupMeta?.appliedMigrations?.some((id) => id.startsWith('legacy-')) ?? false
+    const migrationLog = await gateStore.readLog()
+    const hasSuccessfulRecord = migrationLog.some((r) => r.status === 'success')
+
+    if (migrationCompleted || hasSuccessfulRecord) {
+      setReadOnlyMode(true, '数据存储已切换到 IndexedDB')
+      return { status: 'skipped', readOnly: true, reason: '已迁移过' }
+    }
+
+    /*
+     * 未迁移完成，但 IndexedDB 里已有数据（上次中断/失败后用户建了东西）。
+     * 如实报告 `incomplete`，**绝不谎报 skipped**、也不覆盖用户已有数据。
+     */
     if (existing.instruments > 0 || existing.accounts > 0) {
       setReadOnlyMode(true, '数据存储已切换到 IndexedDB')
-      return { status: 'skipped', readOnly: true, reason: 'IndexedDB 中已有数据，无需重复迁移' }
+      return {
+        status: 'incomplete',
+        readOnly: true,
+        reason:
+          '检测到旧版本数据尚未完成迁移，但 IndexedDB 中已有部分数据。' +
+          '旧数据仍完整保留在本机，未做任何改动。',
+      }
     }
 
     /* ---- 3) 执行迁移 ---- */

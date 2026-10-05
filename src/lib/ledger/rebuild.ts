@@ -63,6 +63,21 @@ export interface RebuildResult {
   orphans: OrphanHolding[]
   /** 因缺少 Instrument 而无法重建的持仓键 */
   skipped: string[]
+  /**
+   * `(accountId, instrumentId)` 在重建结果中出现多次 —— **不变量被破坏**。
+   *
+   * 出现即表示重建自身产出了重复持仓（例如将来又有人复用错 id）。
+   * 调用方应据此**拒绝写入**，而不是把重复静默持久化。
+   */
+  duplicateKeys?: string[]
+  /**
+   * 同一 `(accountId, instrumentId)` 上同时存在**手动**与**派生**持仓 ——
+   * 口径冲突，属于破坏性状态（见 `rebuildFromLedger` 的前置校验）。
+   *
+   * 调用方必须拒绝写入，并告知用户如何消解（换一个账户，或不要对同一
+   * 标的既手工登记又用交易记录）。
+   */
+  mixedModeKeys?: string[]
   /** 是否因重复持仓而被阻断（此时 holdings 原样返回，未做任何改动） */
   blocked?: boolean
   /** 被阻断时的重复详情 */
@@ -149,6 +164,47 @@ export function rebuildFromLedger(portfolio: Portfolio2, ledger: LedgerReport): 
     portfolio.holdings.map((h) => [positionKey(h.accountId, h.instrumentId), h]),
   )
 
+  /*
+   * ## 不变量前置校验：一个 (账户, 标的) 只能有一条持仓
+   *
+   * 持仓表的核心不变量（`detectDuplicateHoldings` / `buildSuggestion` 的
+   * 「口径不一致，请先确认正确的口径」都以此为前提）。
+   *
+   * 但**手动持仓**（`valuationMode: 'manual'`）与 Ledger 派生持仓是两套
+   * 事实来源：手动持仓在下面第 1 步被原样保留，派生行又会按同一个 key
+   * 生成一条 —— 于是同一 key 出现两条、口径不同，属于**破坏性状态**：
+   * 它会让 `detectDuplicateHoldings` 判定失败，从而**永久阻断该账户的所有记账**，
+   * 而应用内没有任何修复入口（`DuplicateSheet` 只展示、不修）。
+   *
+   * 因此这里在**写入之前**就阻断，并如实返回 `mixedModeKeys` 供调用方
+   * 给出可理解的提示。**不静默合并、不丢弃手动值** —— 宁可拒绝这次写入。
+   *
+   * ⚠️ 这条路径**正常 UI 操作不会走到**（`recordTransaction` 与
+   * `createManualHolding` 都已做同向前置校验），这里是兜底防线。
+   */
+  const manualKeys = new Set<string>()
+  for (const h of portfolio.holdings) {
+    if (h.valuationMode === 'manual') manualKeys.add(positionKey(h.accountId, h.instrumentId))
+  }
+  const mixedModeKeys: string[] = []
+  for (const pos of ledger.positions.values()) {
+    const key = positionKey(pos.accountId, pos.instrumentId)
+    if (manualKeys.has(key) && !mixedModeKeys.includes(key)) mixedModeKeys.push(key)
+  }
+  if (mixedModeKeys.length > 0) {
+    return {
+      holdings: portfolio.holdings,
+      rebuiltCount: 0,
+      preservedCount: 0,
+      createdCount: 0,
+      emptiedCount: 0,
+      orphans: [],
+      skipped: [],
+      blocked: true,
+      mixedModeKeys,
+    }
+  }
+
   const holdings: Holding[] = []
   const skipped: string[] = []
   const orphans: OrphanHolding[] = []
@@ -176,7 +232,26 @@ export function rebuildFromLedger(portfolio: Portfolio2, ledger: LedgerReport): 
       continue
     }
 
-    const existing = existingByKey.get(key)
+    /*
+     * ## 只复用「数量口径」既有行的 id（W11 Blocker Patch，P0-1）
+     *
+     * 原实现直接 `existingByKey.get(key)` —— 而按 `accountId::instrumentId`
+     * 找到的行**可能是 `valuationMode === 'manual'` 的持仓**。
+     *
+     * `existingByKey` 是「一个 key 一行」的 Map，因此当同一 key 上同时存在
+     * manual 行与 Ledger 派生行时，只会命中其中之一；若命中 manual 行，
+     * `{...base, valuationMode:'quantity'}` 就会**复用 manual 行的 id**
+     * 生成一条新的派生行 —— 于是持久化层出现 **同 id 两条**，
+     * 并触发 `duplicate-holding`，使该账户**再也无法记账**。
+     *
+     * 修复：manual 持仓**不参与 id 复用**。派生行使用自己的派生身份
+     * （`hold_rebuilt_<accountId>_<instrumentId>`），manual 行保持原样。
+     *
+     * ⚠️ 这是必须支持的正常路径：用户先用手动持仓登记某标的，
+     * 之后再用交易记录同一标的。两者是**不同的事实来源**，应当并存。
+     */
+    const candidate = existingByKey.get(key)
+    const existing = candidate && candidate.valuationMode !== 'manual' ? candidate : undefined
     const isEmpty = Math.abs(pos.quantity) < 1e-8 && Math.abs(pos.costBasis) < 0.005
     if (isEmpty) emptiedCount += 1
 
@@ -228,7 +303,37 @@ export function rebuildFromLedger(portfolio: Portfolio2, ledger: LedgerReport): 
     holdings.push({ ...h, orphan: true, updatedAt: timestamp })
   }
 
-  return { holdings, rebuiltCount, preservedCount, createdCount, emptiedCount, orphans, skipped }
+  /*
+   * ## 最终不变量校验（W11 Blocker Patch，P0-1）
+   *
+   * `(accountId, instrumentId)` 必须唯一 —— 这是持仓表的核心不变量。
+   *
+   * 重建自身**可能**破坏它（历史 bug：复用 manual 行的 id），而调用方
+   * `rebuildHoldingsFromTransactions` 只在**入口**做过重复检测，
+   * 不会检查重建的产物。因此在这里兜底：一旦发现重复，如实报告键，
+   * 由调用方**拒绝写入**（宁可报错，也不能把重复静默持久化）。
+   */
+  const seenKeys = new Set<string>()
+  const duplicateKeys: string[] = []
+  for (const h of holdings) {
+    const key = positionKey(h.accountId, h.instrumentId)
+    if (seenKeys.has(key)) {
+      if (!duplicateKeys.includes(key)) duplicateKeys.push(key)
+    } else {
+      seenKeys.add(key)
+    }
+  }
+
+  return {
+    holdings,
+    rebuiltCount,
+    preservedCount,
+    createdCount,
+    emptiedCount,
+    orphans,
+    skipped,
+    ...(duplicateKeys.length > 0 ? { duplicateKeys } : {}),
+  }
 }
 
 /** 便捷包装：直接返回可用于替换 Holding 表的数组 */
