@@ -64,7 +64,18 @@ async function bootstrap(): Promise<void> {
   try {
     const db = getDb()
     repo = createDexieRepository(db)
-    const result = await migrateOnStart({ repo, db })
+    /*
+     * ⚠️ `readLegacyData: false` —— 本产品（2.0「资产整合」）**不读取**
+     * 1.0 的 `asset-card-wallet/*` localStorage 遗留数据。
+     *
+     * 两者可部署在同一 origin 的不同子路径下，而 localStorage 按 origin
+     * 隔离（不按路径）。若读取，会把 1.0 数据迁移进 2.0 的 IndexedDB，
+     * 并让 1.0 界面被 `setReadOnlyMode` 变成只读 ——
+     * 违反「两版本不互读、不迁移、不覆盖」。
+     *
+     * 1.0 的数据与界面完全不受影响。
+     */
+    const result = await migrateOnStart({ repo, db, readLegacyData: false })
     /*
      * 把迁移状态交给正式 2.0 UI（W11 Blocker Patch，P1-6）。
      *

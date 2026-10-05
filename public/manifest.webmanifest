@@ -2,7 +2,7 @@
   "name": "资产整合",
   "short_name": "资产整合",
   "description": "本地优先的个人资产归集工具。账户、持仓、手工行情与汇率、每日快照与历史趋势，数据只保存在本机浏览器。",
-  "id": "/WealthCard/",
+  "id": "/AssetIntegration/",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

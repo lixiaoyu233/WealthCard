@@ -204,6 +204,24 @@ export async function migrateOnStart(options: {
    */
   db: WealthCardDb
   storage?: Storage
+  /**
+   * 是否读取并迁移 **1.x 的 localStorage 遗留数据**（默认 `true`）。
+   *
+   * ## 为什么需要这个开关（双版本并存）
+   *
+   * 2.0「资产整合」与 1.0 是两个**独立产品**，可部署在同一 origin 的
+   * 不同子路径下（例如 `/AssetIntegration/` 与 `/WealthCard/`）。
+   *
+   * ⚠️ `localStorage` **按 origin 隔离、不按路径隔离** —— 因此 2.0 一旦启动
+   * 就会读到 1.0 的 `asset-card-wallet/*` 键，把 1.0 数据迁移进自己的
+   * IndexedDB，并 `setReadOnlyMode(true)` 让 **1.0 界面变成只读**。
+   *
+   * 这违反「两版本不互读、不迁移、不覆盖」，因此在 2.0 启动路径上显式传 `false`。
+   *
+   * ⚠️ **默认仍是 `true`**：保留本函数原有行为（已被测试覆盖）。
+   * 传 `false` 时不读取任何 1.x 数据、**不删除也不写入任何键**。
+   */
+  readLegacyData?: boolean
   now?: () => Date
 }): Promise<StartupResult> {
   const now = options.now ?? (() => new Date())
@@ -214,6 +232,18 @@ export async function migrateOnStart(options: {
     // 命名刻意区别于下面的 MigrationStore，避免混淆
     const legacyStorage =
       options.storage ?? (typeof window !== 'undefined' ? window.localStorage : undefined)
+
+    /*
+     * 双版本并存：不读、不迁移、不触碰 1.x 的遗留数据。
+     *
+     * 只开启只读（2.0 自身的事实源是 IndexedDB，不写 localStorage 业务键），
+     * 并如实返回 `no-legacy` —— 既不谎报迁移成功，也不改动任何既有数据。
+     */
+    if (options.readLegacyData === false) {
+      setReadOnlyMode(true, '独立部署：不读取旧版 localStorage 数据')
+      return { status: 'no-legacy', readOnly: true, reason: '已关闭遗留数据迁移（独立部署）' }
+    }
+
     const hasLegacy = hasLegacyData(legacyStorage as never)
     const existing = await options.repo.counts()
 
