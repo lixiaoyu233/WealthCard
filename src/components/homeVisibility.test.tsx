@@ -227,6 +227,19 @@ describe('长按拖动排序', () => {
     expect(onSetHomeOrder).toHaveBeenCalledWith(['holdingsProfit', 'trends', 'strategy'])
   })
 
+  it('长按拖拽时不会选中文字、也不会弹系统菜单（手机上的框选问题）', () => {
+    renderHome()
+    const list = screen.getByTestId('home-block-list')
+    // 列表禁用文字选中
+    expect(list.className).toContain('select-none')
+    // 长按弹出的系统菜单被拦掉（fireEvent 返回 false 表示 preventDefault 已生效）
+    expect(fireEvent.contextMenu(list)).toBe(false)
+    // 指针按下时取消默认行为，浏览器不会开始选字
+    const grip = screen.getByTestId('home-drag-holdingsProfit')
+    expect(fireEvent.pointerDown(grip, { pointerId: 1, clientY: 40 })).toBe(false)
+    fireEvent.pointerUp(grip, { pointerId: 1, clientY: 40 })
+  })
+
   it('没到长按时长就松手：不改顺序（只是普通点击）', () => {
     vi.useFakeTimers()
     const { onSetHomeOrder } = renderHome()

@@ -842,6 +842,8 @@ export function HomePage({ settings, onSetHomeVisible, onSetHomeOrder, onNudgeHo
   }
 
   const startPress = (e: RPointerEvent<HTMLButtonElement>, id: HomeBlockId) => {
+    // 取消默认行为：否则长按时浏览器会开始选中文字 / 启动原生拖拽
+    e.preventDefault()
     if (order.length < 2) return
     const from = order.indexOf(id)
     if (from < 0) return
@@ -895,7 +897,17 @@ export function HomePage({ settings, onSetHomeVisible, onSetHomeOrder, onNudgeHo
 
   return (
     <div className="space-y-5">
-      <ul ref={listRef} className="space-y-2" data-testid="home-block-list">
+      {/*
+        长按拖拽时不要选中行里的文字，也不要弹出系统的长按菜单（iOS 的 callout /
+        Android 的上下文菜单）——手机上这两个都会打断拖拽。
+      */}
+      <ul
+        ref={listRef}
+        className="select-none space-y-2"
+        style={{ WebkitTouchCallout: 'none' }}
+        onContextMenu={(e) => e.preventDefault()}
+        data-testid="home-block-list"
+      >
         {order.map((id, i) => {
           const meta = HOME_BLOCK_LABEL[id]
           const isDragging = dragId === id
@@ -912,6 +924,7 @@ export function HomePage({ settings, onSetHomeVisible, onSetHomeOrder, onNudgeHo
               style={{
                 transform: `translateY(${y}px) scale(${isDragging ? 1.02 : 1})`,
                 transition: isDragging || settling ? 'none' : 'transform 180ms cubic-bezier(0.2, 0, 0, 1)',
+                WebkitTouchCallout: 'none',
               }}
               className={`flex items-center gap-1.5 rounded-xl border bg-s2 px-2 py-2.5 ${
                 isDragging ? 'relative z-10 border-line-strong shadow-lg' : 'border-line'
