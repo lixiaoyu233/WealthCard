@@ -142,6 +142,62 @@ export function buildMonthView(records: DividendRecord[], month: string, today: 
   return { month, confirmed, estimated }
 }
 
+/* ------------------------------------------------------------------ *
+ * 月历（首页真实日历用）
+ * ------------------------------------------------------------------ */
+
+export interface MonthCell {
+  date: string
+  day: number
+}
+
+/** 月历网格：周一为一周起点（中文习惯），补齐首尾空位 */
+export function buildMonthGrid(month: string): Array<Array<MonthCell | null>> {
+  const [y, m] = month.split('-').map(Number)
+  const first = new Date(Date.UTC(y, m - 1, 1))
+  const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate()
+  // getUTCDay: 0=周日 → 转成「周一=0」
+  const lead = (first.getUTCDay() + 6) % 7
+  const cells: Array<MonthCell | null> = Array.from({ length: lead }, () => null)
+  for (let day = 1; day <= daysInMonth; day++) {
+    const mm = String(m).padStart(2, '0')
+    const dd = String(day).padStart(2, '0')
+    cells.push({ date: `${y}-${mm}-${dd}`, day })
+  }
+  while (cells.length % 7 !== 0) cells.push(null)
+  const weeks: Array<Array<MonthCell | null>> = []
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7))
+  return weeks
+}
+
+export interface MonthDateMarks {
+  /** 已确认：接口给到的未来已公告，或用户手工录入 */
+  confirmed: string[]
+  /** 预计：按周期 / 历史同月推算出来的 */
+  estimated: string[]
+  /** 已产生：除息日已经过去 */
+  produced: string[]
+}
+
+/** 把某个月的记录分成三类日期，供日历画标记 */
+export function classifyMonthDates(records: DividendRecord[], month: string, today: string): MonthDateMarks {
+  const confirmed: string[] = []
+  const produced: string[] = []
+  for (const r of records) {
+    if (!r.exDate.startsWith(month)) continue
+    if (r.exDate > today) confirmed.push(r.exDate)
+    else produced.push(r.exDate)
+  }
+  const estimated = estimateUpcoming(records, today)
+    .filter((e) => e.nextDate.startsWith(month))
+    .map((e) => e.nextDate)
+  return {
+    confirmed: [...new Set(confirmed)].sort(),
+    estimated: [...new Set(estimated)].sort(),
+    produced: [...new Set(produced)].sort(),
+  }
+}
+
 export type DividendPeriod = 'month' | 'quarter' | 'year'
 
 export function periodRange(period: DividendPeriod, today: string): { start: string; end: string } {

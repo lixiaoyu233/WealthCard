@@ -70,7 +70,7 @@ export interface TrendsConfig {
 }
 
 /** 首页可配置区块（顶部净资产、资产分类、数据管理固定在首尾，不在此列） */
-export type HomeBlockId = 'holdingsProfit' | 'strategy' | 'trends'
+export type HomeBlockId = 'holdingsProfit' | 'strategy' | 'trends' | 'dividends'
 
 /** 首页「中间区块」的显示开关与顺序 */
 export interface HomeLayoutConfig {
@@ -81,13 +81,14 @@ export interface HomeLayoutConfig {
 }
 
 /** 当前版本支持的首页区块（以后新增功能只要在这里加一项） */
-export const HOME_BLOCK_IDS: HomeBlockId[] = ['holdingsProfit', 'strategy', 'trends']
+export const HOME_BLOCK_IDS: HomeBlockId[] = ['holdingsProfit', 'strategy', 'trends', 'dividends']
 
 /** 首页区块文案，设置页与首页共用一份 */
 export const HOME_BLOCK_LABEL: Record<HomeBlockId, { title: string; desc: string }> = {
   holdingsProfit: { title: '持仓总盈亏', desc: '场外基金、场内基金与美股/港股的浮动盈亏' },
   strategy: { title: '投资策略与再平衡', desc: '配置建议、偏离度与调整金额' },
   trends: { title: '走势面板', desc: '净资产 / 总资产 / 负债 / 薪资的历史曲线' },
+  dividends: { title: '分红日历', desc: '本月已确认 / 按历史推算的分红，以及已产生的分红' },
 }
 
 /** 默认顺序：持仓总盈亏 → 投资策略 → 走势；以后新增的区块追加在末尾 */
@@ -97,6 +98,8 @@ const DEFAULT_HOME_VISIBLE: Record<HomeBlockId, boolean> = {
   holdingsProfit: true,
   strategy: false,
   trends: false,
+  // 新增区块默认关闭：老用户升级后首页不会突然多出一块，自己去「首页显示」打开
+  dividends: false,
 }
 
 /** 规范化首页顺序：丢弃未知项与重复项，缺失项按默认顺序补到末尾 */

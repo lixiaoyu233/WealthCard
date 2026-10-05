@@ -74,7 +74,9 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # GitHub Pages 自身部署超时是 10 分钟，这里设 9 分钟：
+    # 让我们自己的 job 先失败并释放并发组，而不是干等 GitHub 掐断
+    timeout-minutes: 9
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

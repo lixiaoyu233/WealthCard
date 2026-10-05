@@ -57,6 +57,8 @@ interface SettingsSheetProps {
   /** 汇率：分红折算成人民币时用 */
   rates?: FxRates | null
   notify: (text: string, tone?: 'success' | 'error' | 'info') => void
+  /** 打开时直接落在哪一页（首页区块的「查看全部」用） */
+  initialPage?: SettingsPage
   onSetFixed: (patch: Partial<AppSettings['salary']['fixed']>) => void
   onUpsertSalary: (month: string, amount: number) => void
   onRemoveSalary: (month: string) => void
@@ -65,6 +67,9 @@ interface SettingsSheetProps {
 
 /** 设置的三级菜单：先进列表，再进具体页面 */
 type Page = 'menu' | 'fund' | 'salary' | 'home' | 'dividends' | 'strategy' | 'trends' | 'diagnostics'
+
+/** 设置里的具体页面（首页区块的「查看全部」需要直接跳过来） */
+export type SettingsPage = Exclude<Page, 'menu'>
 
 const PAGE_META: Record<Exclude<Page, 'menu'>, { title: string; subtitle: string }> = {
   fund: { title: '股票基金申购方式', subtitle: '买入时资金从哪里来' },
@@ -132,8 +137,8 @@ export default function SettingsSheet(props: SettingsSheetProps) {
   const [page, setPage] = useState<Page>('menu')
 
   useEffect(() => {
-    if (open) setPage('menu')
-  }, [open])
+    if (open) setPage(props.initialPage ?? 'menu')
+  }, [open, props.initialPage])
 
   const meta = page === 'menu' ? null : PAGE_META[page]
 

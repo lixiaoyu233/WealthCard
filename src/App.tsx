@@ -12,7 +12,8 @@ import CategoryForm from './components/CategoryForm'
 import ConfirmDialog from './components/ConfirmDialog'
 import StrategyCard from './components/StrategyCard'
 import StrategySettingsSheet from './components/StrategySettingsSheet'
-import SettingsSheet from './components/SettingsSheet'
+import SettingsSheet, { type SettingsPage } from './components/SettingsSheet'
+import DividendHomeCard from './components/DividendHomeCard'
 import TrendsPanel from './components/TrendsPanel'
 import Toast, { type ToastMessage, type ToastTone } from './components/Toast'
 import { useStrategy } from './hooks/useStrategy'
@@ -100,6 +101,8 @@ export default function App() {
 
   const [strategySheetOpen, setStrategySheetOpen] = useState(false)
   const [settingsSheetOpen, setSettingsSheetOpen] = useState(false)
+  /** 首页区块的「查看全部」可以直接落在设置里的某一页 */
+  const [settingsPage, setSettingsPage] = useState<SettingsPage | undefined>(undefined)
   const [openCategoryId, setOpenCategoryId] = useState<string | null>(null)
   const [categoryForm, setCategoryForm] = useState<{ open: boolean; initial?: Category | null }>({ open: false })
   const [confirmReset, setConfirmReset] = useState(false)
@@ -311,6 +314,25 @@ export default function App() {
           showLabels={settingsState.settings.trends.showLabels}
           showMom={settingsState.settings.trends.showMom}
           colorByTrend={settingsState.settings.trends.colorByTrend}
+        />
+      </div>
+    ),
+    dividends: (
+      <div className="mt-4">
+        <DividendHomeCard
+          portfolio={portfolio}
+          dividends={dividendsState}
+          rates={fx.rates}
+          dividendSettings={settingsState.settings.dividends}
+          notify={notify}
+          onOpenAll={() => {
+            setSettingsPage('dividends')
+            setSettingsSheetOpen(true)
+          }}
+          onNeedCashAccount={() => {
+            setSettingsPage('dividends')
+            setSettingsSheetOpen(true)
+          }}
         />
       </div>
     ),
@@ -539,7 +561,11 @@ export default function App() {
         settings={settingsState.settings}
         portfolio={portfolio}
         candidates={settingsState.candidates}
-        onClose={() => setSettingsSheetOpen(false)}
+        initialPage={settingsPage}
+        onClose={() => {
+          setSettingsSheetOpen(false)
+          setSettingsPage(undefined)
+        }}
         onSetFundDefault={settingsState.setFundDefault}
         onSetFundingSource={settingsState.setFundingSource}
         onSetTrends={settingsState.setTrends}

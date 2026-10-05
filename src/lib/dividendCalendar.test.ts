@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import type { DividendRecord } from './dividends'
 import {
   addMonths,
+  buildMonthGrid,
   buildMonthView,
   buildPeriodSummary,
+  classifyMonthDates,
   estimateUpcoming,
   median,
   periodRange,
@@ -114,6 +116,47 @@ describe('buildMonthView', () => {
   it('过去的记录不算「本月已确认」', () => {
     const records = [rec({ exDate: '2026-10-01' })]
     expect(buildMonthView(records, '2026-10', '2026-10-05').confirmed).toEqual([])
+  })
+})
+
+describe('buildMonthGrid：月历网格（周一开头）', () => {
+  it('2026-10：1 号是周四 → 前面空 3 格，总共 5 行', () => {
+    const weeks = buildMonthGrid('2026-10')
+    expect(weeks[0].slice(0, 4).map((c) => c?.day ?? null)).toEqual([null, null, null, 1])
+    expect(weeks.length).toBe(5)
+    expect(weeks.flat().filter(Boolean)).toHaveLength(31)
+    expect(weeks[4].map((c) => c?.day ?? null)).toEqual([26, 27, 28, 29, 30, 31, null])
+  })
+
+  it('2026-02（平年）：28 天', () => {
+    const cells = buildMonthGrid('2026-02').flat().filter(Boolean)
+    expect(cells).toHaveLength(28)
+    expect(cells[27]?.date).toBe('2026-02-28')
+  })
+})
+
+describe('classifyMonthDates：日历上的三类标记', () => {
+  it('未来=已确认，过去=已产生，推算出=预计', () => {
+    const records = [
+      rec({ id: 'a', exDate: '2026-10-20' }), // 未来
+      rec({ id: 'b', exDate: '2026-10-02' }), // 已过去
+      rec({ id: 'c', code: '000002', exDate: '2026-07-15', frequency: 'quarterly' }), // 每季 → 10-15 预计
+    ]
+    const marks = classifyMonthDates(records, '2026-10', '2026-10-05')
+    expect(marks.confirmed).toEqual(['2026-10-20'])
+    expect(marks.produced).toEqual(['2026-10-02'])
+    expect(marks.estimated).toEqual(['2026-10-15'])
+  })
+
+  it('同一天多笔只留一个日期；其他月份不混进来', () => {
+    const records = [
+      rec({ id: 'a', exDate: '2026-10-20' }),
+      rec({ id: 'b', exDate: '2026-10-20' }),
+      rec({ id: 'c', exDate: '2026-11-01' }),
+    ]
+    const marks = classifyMonthDates(records, '2026-10', '2026-10-05')
+    expect(marks.confirmed).toEqual(['2026-10-20'])
+    expect(marks.produced).toEqual([])
   })
 })
 

@@ -133,12 +133,18 @@ function layoutRows() {
 }
 
 describe('首页显示设置页', () => {
-  it('三个区块全部列出（包括隐藏的），顺序默认是 持仓总盈亏 → 投资策略 → 走势', () => {
+  it('四个区块全部列出（包括隐藏的），默认顺序 持仓总盈亏 → 投资策略 → 走势 → 分红日历', () => {
     renderHome()
-    expect(rowIds()).toEqual(['home-row-holdingsProfit', 'home-row-strategy', 'home-row-trends'])
+    expect(rowIds()).toEqual([
+      'home-row-holdingsProfit',
+      'home-row-strategy',
+      'home-row-trends',
+      'home-row-dividends',
+    ])
     expect(screen.getByText('持仓总盈亏')).toBeTruthy()
     expect(screen.getByText('投资策略与再平衡')).toBeTruthy()
     expect(screen.getByText('走势面板')).toBeTruthy()
+    expect(screen.getByText('分红日历')).toBeTruthy()
   })
 
   it('开关默认值：持仓总盈亏开，投资策略与走势关', () => {
@@ -155,7 +161,10 @@ describe('首页显示设置页', () => {
 
     cleanup()
     const second = renderHome({
-      home: { order: ['holdingsProfit', 'strategy', 'trends'], visible: { holdingsProfit: true, strategy: true, trends: false } },
+      home: {
+        order: ['holdingsProfit', 'strategy', 'trends'],
+        visible: { holdingsProfit: true, strategy: true, trends: false, dividends: false },
+      },
     })
     fireEvent.click(screen.getByTestId('home-toggle-strategy'))
     expect(second.onSetHomeVisible).toHaveBeenCalledWith('strategy', false)
@@ -167,7 +176,7 @@ describe('首页显示设置页', () => {
     expect(onNudgeHomeBlock).toHaveBeenCalledWith('holdingsProfit', 1)
 
     const up = screen.getByTestId('home-up-holdingsProfit') as HTMLButtonElement
-    const down = screen.getByTestId('home-down-trends') as HTMLButtonElement
+    const down = screen.getByTestId('home-down-dividends') as HTMLButtonElement
     expect(up.disabled).toBe(true)
     expect(down.disabled).toBe(true)
     fireEvent.click(up)
@@ -193,7 +202,7 @@ describe('长按拖动排序', () => {
     fireEvent.pointerMove(grip, { pointerId: 1, clientY: 140 }) // 越过第二行中线（120）
     fireEvent.pointerUp(grip, { pointerId: 1, clientY: 140 })
 
-    expect(onSetHomeOrder).toHaveBeenCalledWith(['strategy', 'holdingsProfit', 'trends'])
+    expect(onSetHomeOrder).toHaveBeenCalledWith(['strategy', 'holdingsProfit', 'trends', 'dividends'])
   })
 
   it('一直拖到最后一格，顺序整体上移', () => {
@@ -206,10 +215,10 @@ describe('长按拖动排序', () => {
     act(() => {
       vi.advanceTimersByTime(220)
     })
-    fireEvent.pointerMove(grip, { pointerId: 1, clientY: 280 }) // 越过第三行中线（200）
-    fireEvent.pointerUp(grip, { pointerId: 1, clientY: 280 })
+    fireEvent.pointerMove(grip, { pointerId: 1, clientY: 300 }) // 越过第四行中线（280）→ 落到最后一格
+    fireEvent.pointerUp(grip, { pointerId: 1, clientY: 300 })
 
-    expect(onSetHomeOrder).toHaveBeenCalledWith(['strategy', 'trends', 'holdingsProfit'])
+    expect(onSetHomeOrder).toHaveBeenCalledWith(['strategy', 'trends', 'dividends', 'holdingsProfit'])
   })
 
   it('往上拖同样有效', () => {
@@ -225,7 +234,7 @@ describe('长按拖动排序', () => {
     fireEvent.pointerMove(grip, { pointerId: 1, clientY: 60 }) // 越过第二行中线（120）
     fireEvent.pointerUp(grip, { pointerId: 1, clientY: 60 })
 
-    expect(onSetHomeOrder).toHaveBeenCalledWith(['holdingsProfit', 'trends', 'strategy'])
+    expect(onSetHomeOrder).toHaveBeenCalledWith(['holdingsProfit', 'trends', 'strategy', 'dividends'])
   })
 
   it('长按拖拽时不会选中文字、也不会弹系统菜单（手机上的框选问题）', () => {

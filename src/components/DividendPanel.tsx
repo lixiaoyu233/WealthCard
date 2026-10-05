@@ -1,18 +1,13 @@
 import { useMemo, useState } from 'react'
-import { RefreshCw, Trash2 } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 import type { Portfolio } from '../types/asset'
 import type { FxRates } from '../lib/currency'
-import {
-  estimateAmountCny,
-  holdingKey,
-  type DividendMode,
-  type DividendRecord,
-} from '../lib/dividends'
-import { buildMonthView, buildPeriodSummary, type DividendEvent, type DividendPeriod } from '../lib/dividendCalendar'
+import { estimateAmountCny, holdingKey, type DividendMode } from '../lib/dividends'
+import { buildMonthView, buildPeriodSummary, type DividendPeriod } from '../lib/dividendCalendar'
 import { HOLDING_MARKET_CURRENCY, HOLDING_MARKET_LABEL, type HoldingMarket } from '../lib/usStock'
 import type { DividendSettings } from '../lib/settings'
 import type { UseDividends } from '../hooks/useDividends'
-import { fetchCloseOnDate } from '../lib/priceHistory'
+import DividendEventRow, { type DividendRowContext } from './DividendEventRow'
 import { formatCNY, todayKey } from '../lib/format'
 import DepositTargetPicker from './DepositTargetPicker'
 import DividendForm, { type DividendFormTarget } from './DividendForm'
@@ -52,8 +47,6 @@ export default function DividendPanel({
   const [tab, setTab] = useState<Tab>('calendar')
   const [period, setPeriod] = useState<DividendPeriod>('year')
   const [formTarget, setFormTarget] = useState<DividendFormTarget | null>(null)
-  const [prices, setPrices] = useState<Record<string, string>>({})
-  const [fetchingPrice, setFetchingPrice] = useState<Record<string, boolean>>({})
 
   const today = todayKey()
   const tax = { us: dividendSettings.usTaxRate, hk: dividendSettings.hkTaxRate }
@@ -85,141 +78,18 @@ export default function DividendPanel({
     return out
   }, [portfolio, dividends.records])
 
-  const modeOfRecord = (r: DividendRecord): DividendMode =>
-    r.mode ?? dividends.prefs[holdingKey(r.market, r.code)] ?? dividendSettings.defaultMode
-
-  const report = (outcome: { ok: boolean; reason?: string; message?: string }) =>
-    notify(outcome.ok ? (outcome.message ?? '已处理') : (outcome.reason ?? '处理失败'), outcome.ok ? 'success' : 'error')
-
-  const runCash = (r: DividendRecord) => {
-    const target = dividendSettings.defaultCashTarget
-    if (!target) {
-      notify('请先在「分红设置」里选择默认入账账户', 'error')
-      setTab('settings')
-      return
-    }
-    report(dividends.applyCash(r, target))
+  /** 行组件的运行环境：设置页与首页卡片共用同一个组件，避免两处行为漂移 */
+  const rowCtx: DividendRowContext = {
+    portfolio,
+    dividends,
+    rates,
+    tax,
+    defaultMode: dividendSettings.defaultMode,
+    defaultCashTarget: dividendSettings.defaultCashTarget,
+    notify,
+    onNeedCashAccount: () => setTab('settings'),
   }
 
-  const runReinvest = (r: DividendRecord) => report(dividends.applyReinvest(r, Number(prices[r.id] ?? '')))
-
-  /** 自动取除息日的不复权价（A股/港股/场外基金可用；美股暂缺，提示手填） */
-  const fillPrice = async (r: DividendRecord) => {
-    setFetchingPrice((prev) => ({ ...prev, [r.id]: true }))
-    try {
-      const price = await fetchCloseOnDate(r.market, r.code, r.exDate)
-      if (price === undefined) {
-        notify(
-          r.market === 'us' ? '美股历史价暂不支持自动获取，请手动填写' : '没取到该日期的历史价，请手动填写',
-          'error',
-        )
-        return
-      }
-      setPrices((prev) => ({ ...prev, [r.id]: String(price) }))
-    } catch {
-      notify('取历史价失败，请手动填写', 'error')
-    } finally {
-      setFetchingPrice((prev) => ({ ...prev, [r.id]: false }))
-    }
-  }
-
-  const renderEvent = (event: DividendEvent, kind: 'confirmed' | 'estimated') => {
-    const r = event.record
-    const amount = estimateAmountCny(portfolio, r, tax, rates)
-    const mode = modeOfRecord(r)
-    return (
-      <li
-        key={r.id}
-        className="rounded-xl border border-line bg-s2 px-3.5 py-2.5"
-        data-testid={`dividend-row-${r.id}`}
-      >
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <p className="truncate text-[13px] text-ink1">
-              <span className="tabular-nums text-ink2">{r.exDate}</span>
-              <span className="ml-2">{r.name || r.code}</span>
-            </p>
-            <p className="mt-0.5 text-[11px] leading-relaxed text-ink4">
-              {HOLDING_MARKET_LABEL[r.market]} · 每份 {r.cashPerUnit} {r.currency}
-              {r.afterTaxPerUnit !== undefined ? `（税后 ${r.afterTaxPerUnit}）` : ''}
-              {r.bonusRatio ? ` · 10 送转 ${r.bonusRatio} 股` : ''}
-            </p>
-            {kind === 'estimated' && event.basis ? (
-              <p className="mt-0.5 text-[11px] tone-info">预计依据：{event.basis}</p>
-            ) : null}
-          </div>
-          <div className="shrink-0 text-right">
-            <p className="text-[13px] font-medium tabular-nums text-ink1">≈ {formatCNY(amount, 2)}</p>
-            <p className="mt-0.5 text-[11px] text-ink4">{mode === 'cash' ? '现金分红' : '再投资'}</p>
-          </div>
-        </div>
-
-        {kind === 'confirmed' && !r.applied ? (
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {mode === 'cash' ? (
-              <button
-                type="button"
-                data-testid={`dividend-cash-${r.id}`}
-                className="btn-ghost px-3 py-1.5 text-[12px]"
-                onClick={() => runCash(r)}
-              >
-                现金入账
-              </button>
-            ) : (
-              <>
-                <input
-                  data-testid={`dividend-price-${r.id}`}
-                  value={prices[r.id] ?? ''}
-                  onChange={(e) => setPrices((prev) => ({ ...prev, [r.id]: e.target.value.replace(/[^\d.]/g, '') }))}
-                  inputMode="decimal"
-                  placeholder="除息日净值"
-                  className="field-input w-28 py-1.5 text-[12px] tabular-nums"
-                />
-                <button
-                  type="button"
-                  data-testid={`dividend-fetchprice-${r.id}`}
-                  className="btn-ghost px-3 py-1.5 text-[12px]"
-                  disabled={fetchingPrice[r.id]}
-                  onClick={() => void fillPrice(r)}
-                >
-                  {fetchingPrice[r.id] ? '取价中…' : '取除息日价'}
-                </button>
-                <button
-                  type="button"
-                  data-testid={`dividend-reinvest-${r.id}`}
-                  className="btn-ghost px-3 py-1.5 text-[12px]"
-                  onClick={() => runReinvest(r)}
-                >
-                  再投资
-                </button>
-              </>
-            )}
-            {r.bonusRatio ? (
-              <button
-                type="button"
-                data-testid={`dividend-bonus-${r.id}`}
-                className="btn-ghost px-3 py-1.5 text-[12px]"
-                onClick={() => report(dividends.applyBonus(r))}
-              >
-                应用送转 10 送转 {r.bonusRatio} 股
-              </button>
-            ) : null}
-            {r.source === 'manual' ? (
-              <button
-                type="button"
-                aria-label="删除该分红记录"
-                className="ml-auto rounded-full p-1.5 text-ink4 transition hover:bg-danger/10 hover:tone-danger"
-                onClick={() => dividends.remove(r.id)}
-              >
-                <Trash2 size={13} />
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-        {r.applied ? <p className="mt-1.5 text-[11px] tone-down">✓ 已入账</p> : null}
-      </li>
-    )
-  }
 
   return (
     <div className="space-y-4">
@@ -266,7 +136,11 @@ export default function DividendPanel({
                 本月没有已公告的分红。
               </p>
             ) : (
-              <ul className="space-y-2">{view.confirmed.map((e) => renderEvent(e, 'confirmed'))}</ul>
+              <ul className="space-y-2">
+                {view.confirmed.map((e) => (
+                  <DividendEventRow key={e.record.id} record={e.record} kind="confirmed" basis={e.basis} ctx={rowCtx} />
+                ))}
+              </ul>
             )}
           </div>
 
@@ -277,7 +151,11 @@ export default function DividendPanel({
                 没有可推算的分红（需要至少 2 年同月记录，或你指定的分红周期）。
               </p>
             ) : (
-              <ul className="space-y-2">{view.estimated.map((e) => renderEvent(e, 'estimated'))}</ul>
+              <ul className="space-y-2">
+                {view.estimated.map((e) => (
+                  <DividendEventRow key={e.record.id} record={e.record} kind="estimated" basis={e.basis} ctx={rowCtx} />
+                ))}
+              </ul>
             )}
           </div>
 
@@ -304,7 +182,11 @@ export default function DividendPanel({
               合计 <span className="font-medium tabular-nums">{formatCNY(producedTotal, 2)}</span> 元 · {produced.length} 笔
             </p>
             {produced.length > 0 ? (
-              <ul className="mt-2 space-y-2">{produced.map((r) => renderEvent({ record: r, kind: 'confirmed' }, 'confirmed'))}</ul>
+              <ul className="mt-2 space-y-2">
+                {produced.map((r) => (
+                  <DividendEventRow key={r.id} record={r} kind="confirmed" ctx={rowCtx} />
+                ))}
+              </ul>
             ) : null}
           </div>
         </div>

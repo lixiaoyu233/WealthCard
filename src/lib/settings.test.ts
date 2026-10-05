@@ -303,10 +303,10 @@ describe('分红设置', () => {
  * 首页显示配置（设置 → 首页显示）
  * ------------------------------------------------------------------ */
 describe('首页显示配置', () => {
-  it('默认：持仓总盈亏打开，投资策略与走势关闭；顺序为 持仓总盈亏 → 投资策略 → 走势', () => {
+  it('默认：只有持仓总盈亏打开；顺序为 持仓总盈亏 → 投资策略 → 走势 → 分红日历', () => {
     const s = createDefaultSettings()
-    expect(s.home.order).toEqual(['holdingsProfit', 'strategy', 'trends'])
-    expect(s.home.visible).toEqual({ holdingsProfit: true, strategy: false, trends: false })
+    expect(s.home.order).toEqual(['holdingsProfit', 'strategy', 'trends', 'dividends'])
+    expect(s.home.visible).toEqual({ holdingsProfit: true, strategy: false, trends: false, dividends: false })
   })
 
   it('老数据没有 home：走势的开关沿用原来的 trends.enabled / 旧字段', () => {
@@ -331,34 +331,48 @@ describe('首页显示配置', () => {
         visible: { trends: false, strategy: true, holdingsProfit: false },
       },
     })
-    expect(s.home.order).toEqual(['trends', 'strategy', 'holdingsProfit'])
-    expect(s.home.visible).toEqual({ trends: false, strategy: true, holdingsProfit: false })
+    // 存储里没提到的区块（分红日历）按默认顺序补到末尾，其余保持用户顺序
+    expect(s.home.order).toEqual(['trends', 'strategy', 'holdingsProfit', 'dividends'])
+    expect(s.home.visible).toEqual({ trends: false, strategy: true, holdingsProfit: false, dividends: false })
     expect(s.trends.enabled).toBe(false)
   })
 
   it('顺序里的未知项与重复项丢弃，缺失项按默认顺序补到末尾', () => {
-    expect(normalizeHomeOrder(['trends', 'reits', 'trends'])).toEqual(['trends', 'holdingsProfit', 'strategy'])
-    expect(normalizeHomeOrder(undefined)).toEqual(['holdingsProfit', 'strategy', 'trends'])
-    expect(normalizeHomeOrder('bogus')).toEqual(['holdingsProfit', 'strategy', 'trends'])
+    expect(normalizeHomeOrder(['trends', 'reits', 'trends'])).toEqual([
+      'trends',
+      'holdingsProfit',
+      'strategy',
+      'dividends',
+    ])
+    expect(normalizeHomeOrder(undefined)).toEqual(['holdingsProfit', 'strategy', 'trends', 'dividends'])
+    expect(normalizeHomeOrder('bogus')).toEqual(['holdingsProfit', 'strategy', 'trends', 'dividends'])
     // 以后新增区块（如分红日历）会被追加到末尾，不会因为存过顺序就丢
     expect(normalizeSettings({ home: { order: ['strategy'] } }).home.order).toEqual([
       'strategy',
       'holdingsProfit',
       'trends',
+      'dividends',
     ])
   })
 
   it('脏数据不崩：home / visible 不是对象时回落默认', () => {
-    expect(normalizeSettings({ home: 'x' }).home.order).toEqual(['holdingsProfit', 'strategy', 'trends'])
+    expect(normalizeSettings({ home: 'x' }).home.order).toEqual([
+      'holdingsProfit',
+      'strategy',
+      'trends',
+      'dividends',
+    ])
     expect(normalizeSettings({ home: { order: 3, visible: 7 } }).home.visible).toEqual({
       holdingsProfit: true,
       strategy: false,
       trends: false,
+      dividends: false,
     })
     expect(normalizeSettings({ home: { visible: { strategy: true } } }).home.visible).toEqual({
       holdingsProfit: true,
       strategy: true,
       trends: false,
+      dividends: false,
     })
   })
 
