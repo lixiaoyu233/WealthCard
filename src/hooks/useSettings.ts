@@ -72,6 +72,11 @@ export function useSettings(portfolio: Portfolio, applyPortfolio: (p: Portfolio)
     }))
   }, [])
 
+  /** 分红设置（默认入账账户、港美股税率、默认分红方式） */
+  const setDividendSettings = useCallback((patch: Partial<AppSettings['dividends']>) => {
+    setSettings((s) => ({ ...s, dividends: { ...s.dividends, ...patch } }))
+  }, [])
+
   /** 首页区块顺序（拖拽落位与 ↑↓ 按钮共用） */
   const setHomeOrder = useCallback((order: HomeBlockId[]) => {
     setSettings((s) => ({ ...s, home: { ...s.home, order: normalizeHomeOrder(order) } }))
@@ -175,6 +180,7 @@ export function useSettings(portfolio: Portfolio, applyPortfolio: (p: Portfolio)
     setTrends,
     setHomeVisible,
     setHomeOrder,
+    setDividendSettings,
     nudgeHomeBlock,
     setFixed,
     upsertSalary,

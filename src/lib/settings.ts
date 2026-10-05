@@ -126,6 +126,18 @@ export function moveHomeBlock(order: HomeBlockId[], id: HomeBlockId, dir: -1 | 1
   return next
 }
 
+/** 分红相关设置 */
+export interface DividendSettings {
+  /** 现金分红的默认入账账户（只允许「现金与固定资产」里的金额类条目） */
+  defaultCashTarget?: FundingSource
+  /** 美股预扣税率（0~1，如 0.1 / 0.3）——中国居民常见 10%（W-8BEN）或 30% */
+  usTaxRate: number
+  /** 港股预扣税率（0~1，如 H 股 10%） */
+  hkTaxRate: number
+  /** 新标的的默认分红方式 */
+  defaultMode: 'cash' | 'reinvest'
+}
+
 export interface AppSettings {
   version: number
   fund: FundDefaults
@@ -133,6 +145,8 @@ export interface AppSettings {
   trends: TrendsConfig
   /** 首页显示哪些中间区块、按什么顺序 */
   home: HomeLayoutConfig
+  /** 分红：默认入账账户、港美股税率、默认分红方式 */
+  dividends: DividendSettings
   salary: {
     /** 按月存档的薪资记录 */
     records: SalaryRecord[]
@@ -152,6 +166,7 @@ export function createDefaultSettings(): AppSettings {
       colorByTrend: true,
     },
     home: { order: [...DEFAULT_HOME_ORDER], visible: { ...DEFAULT_HOME_VISIBLE } },
+    dividends: { usTaxRate: 0.1, hkTaxRate: 0.1, defaultMode: 'cash' },
     fund: { useFunding: false },
     salary: {
       records: [],
@@ -232,6 +247,22 @@ function normalizeTrends(raw: Record<string, unknown>, salary: Record<string, un
   }
 }
 
+/** 分红设置：脏数据一律回落默认值，税率限制在 0~1 */
+function normalizeDividendSettings(raw: Record<string, unknown>): DividendSettings {
+  const base = { usTaxRate: 0.1, hkTaxRate: 0.1, defaultMode: 'cash' as const }
+  const d = isRecord(raw.dividends) ? raw.dividends : null
+  const rate = (v: unknown, fallback: number) => {
+    const n = Number(v)
+    return Number.isFinite(n) && n >= 0 && n <= 1 ? n : fallback
+  }
+  return {
+    defaultCashTarget: d ? normalizeSource(d.defaultCashTarget) : undefined,
+    usTaxRate: d ? rate(d.usTaxRate, base.usTaxRate) : base.usTaxRate,
+    hkTaxRate: d ? rate(d.hkTaxRate, base.hkTaxRate) : base.hkTaxRate,
+    defaultMode: d && d.defaultMode === 'reinvest' ? 'reinvest' : 'cash',
+  }
+}
+
 /** 首页区块配置：老数据没有 home 时，走势的开关沿用原来的 trends.enabled */
 function normalizeHome(raw: Record<string, unknown>, legacyTrendsEnabled: boolean): HomeLayoutConfig {
   const h = isRecord(raw.home) ? raw.home : null
@@ -297,6 +328,7 @@ export function normalizeSettings(raw: unknown): AppSettings {
       lastFundingSource: normalizeSource(fund.lastFundingSource),
     },
     home,
+    dividends: normalizeDividendSettings(raw),
     // 兼容旧数据：v1 用顶层 trendsEnabled / salary.showChart 表示开关，
     // 且当时面板固定展示全部四个指标
     trends,
@@ -433,6 +465,55 @@ export function listCashCandidates(portfolio: Portfolio): CashCandidate[] {
     }
   }
   return out.sort((a, b) => b.amount - a.amount)
+}
+
+/** 入账目标所在的内置分类：「现金与固定资产」 */
+export const CASH_CATEGORY_ID = 'cat_cash'
+
+/**
+ * 可**入账**的现金项目（薪资、分红写入用）。
+ *
+ * 与「资金来源」的关键区别：入账是**加钱**，所以余额为 0（甚至负数）也必须可选 ——
+ * 新建的「招行活期」余额就是 0，旧规则会把它排除掉，导致「没有可选项」。
+ * 另外按确认过的口径：只列「现金与固定资产」这一个分类下的金额类条目。
+ */
+export function listDepositTargets(portfolio: Portfolio): CashCandidate[] {
+  const out: CashCandidate[] = []
+  for (const category of portfolio.categories) {
+    if (category.id !== CASH_CATEGORY_ID) continue
+    for (const item of category.items) {
+      if (item.kind !== 'amount') continue
+      out.push({
+        categoryId: category.id,
+        categoryName: category.name,
+        itemId: item.id,
+        itemName: item.name,
+        amount: Number(item.amount) || 0,
+      })
+    }
+  }
+  return out.sort((a, b) => b.amount - a.amount)
+}
+
+/** 空状态要说清「为什么没有可选项」，否则用户不知道去哪加 */
+export interface DepositTargetDiagnosis {
+  categoryFound: boolean
+  categoryName?: string
+  /** 「现金与固定资产」下的条目总数 */
+  itemCount: number
+  /** 其中金额类的数量（只有金额类才能入账） */
+  amountItemCount: number
+}
+
+export function diagnoseDepositTargets(portfolio: Portfolio): DepositTargetDiagnosis {
+  const category = portfolio.categories.find((c) => c.id === CASH_CATEGORY_ID)
+  if (!category) return { categoryFound: false, itemCount: 0, amountItemCount: 0 }
+  return {
+    categoryFound: true,
+    categoryName: category.name,
+    itemCount: category.items.length,
+    amountItemCount: category.items.filter((i) => i.kind === 'amount').length,
+  }
 }
 
 /** 按 id 找候选项目，便于回显与校验 */

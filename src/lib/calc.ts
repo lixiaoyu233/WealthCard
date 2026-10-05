@@ -358,7 +358,9 @@ export function collectCurrencies(portfolio: Portfolio): CurrencyCode[] {
     for (const item of category.items) {
       if (isFund(item)) {
         const market = item.market ?? 'cn'
-        if (market !== 'cn') set.add(HOLDING_MARKET_CURRENCY[market])
+        // A股与境内基金都是人民币，不能算成外币暴露
+        const ccy = HOLDING_MARKET_CURRENCY[market]
+        if (ccy && ccy !== 'CNY') set.add(ccy)
         continue
       }
       const code = (item as { currency?: CurrencyCode }).currency
@@ -383,21 +385,46 @@ export function categoryNeedsSync(category: Category): boolean {
  *
  * 注意：早期只收 6 位数字，导致美股/港股持仓拿不到行情。
  */
-export function collectFundCodes(portfolio: Portfolio): string[] {
-  const codes = new Set<string>()
+export interface HoldingRef {
+  code: string
+  market: HoldingMarket
+}
+
+/**
+ * 收集需要拉行情的持仓（按 市场+代码 去重）。
+ *
+ * 为什么要带 market：A股个股代码与场外基金代码**同形**（都是 6 位数字），
+ * 只靠代码形状无法判断该走天天基金还是腾讯行情，必须带上用户选的市场。
+ */
+export function collectHoldingRefs(portfolio: Portfolio): HoldingRef[] {
+  const out: HoldingRef[] = []
+  const seen = new Set<string>()
   for (const category of portfolio.categories) {
     for (const item of category.items) {
       if (!isFund(item)) continue
       const code = (item.code ?? '').trim()
       if (!code) continue
       const market = item.market ?? 'cn'
-      // 6 位数字属于境内基金；其余交给市场识别（字母=美股，1~5 位数字=港股）
       const isDomestic = /^\d{6}$/.test(code)
-      const isStock = market === 'us' ? /^[A-Za-z][A-Za-z.\-]{0,5}$/.test(code) : /^\d{1,5}$/.test(code)
-      if (isDomestic || isStock) codes.add(code)
+      const byMarket =
+        market === 'us'
+          ? /^[A-Za-z][A-Za-z.\-]{0,5}$/.test(code)
+          : market === 'hk'
+            ? /^\d{1,5}$/.test(code)
+            : isDomestic // cn / ashare 都是 6 位数字
+      if (!isDomestic && !byMarket) continue
+      const key = `${market}:${code}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push({ code, market })
     }
   }
-  return [...codes]
+  return out
+}
+
+/** 只取代码（首页「N 只持仓」、刷新按钮等展示用） */
+export function collectFundCodes(portfolio: Portfolio): string[] {
+  return collectHoldingRefs(portfolio).map((r) => r.code)
 }
 
 /** 查询某只基金在所有分类中的持仓分布 */

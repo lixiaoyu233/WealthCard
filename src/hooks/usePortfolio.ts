@@ -9,12 +9,20 @@ import type {
   Portfolio,
 } from '../types/asset'
 import { CATEGORY_COLORS, SCHEMA_VERSION, createDefaultCategories } from '../lib/defaults'
-import { collectCurrencies, collectFundCodes, fxExposure, isFund, safeNum, summarize } from '../lib/calc'
+import {
+  collectCurrencies,
+  collectFundCodes,
+  collectHoldingRefs,
+  fxExposure,
+  isFund,
+  safeNum,
+  summarize,
+} from '../lib/calc'
 /** 允许的行情代码：境内基金 6 位数字，或美股字母 / 港股数字 */
 const STOCK_CODE_RE = /^[A-Za-z][A-Za-z.\-]{0,5}$|^\d{1,5}$/
 import { loadPortfolio, savePortfolio } from '../lib/storage'
 import { describeRates, hasUsableRates, isFxStale, type CurrencyCode, type FxRates } from '../lib/currency'
-import type { HoldingMarket } from '../lib/usStock'
+import { fetchTencentQuotes, type HoldingMarket } from '../lib/usStock'
 import { fetchRates, loadCachedRates } from '../lib/fx'
 import { todayKey } from '../lib/format'
 import { uid } from '../lib/id'
@@ -199,6 +207,8 @@ export function usePortfolio() {
   const summary = useMemo(() => summarize(portfolio, rates), [portfolio, rates])
   const exposure = useMemo(() => fxExposure(portfolio, rates), [portfolio, rates])
   const fundCodes = useMemo(() => collectFundCodes(portfolio), [portfolio])
+  /** 带市场信息的持仓（A股与场外基金代码同形，必须靠它分流行情接口） */
+  const holdingRefs = useMemo(() => collectHoldingRefs(portfolio), [portfolio])
 
   /** 拉取汇率（缓存未过期时默认跳过） */
   const syncFx = useCallback(async (opts: { force?: boolean; silent?: boolean } = {}) => {
@@ -253,37 +263,65 @@ export function usePortfolio() {
     [rates],
   )
 
-  /** 拉取基金行情并回填 */
+  const describeSyncError = useCallback(
+    (e: unknown) =>
+      e instanceof FundServiceError
+        ? `${e.message}${e.attempts.length ? `（${e.attempts.map((a) => a.error).join('；')}）` : ''}`
+        : e instanceof Error
+          ? e.message
+          : '行情同步失败',
+    [],
+  )
+
+  /**
+   * 拉取行情并回填。
+   *
+   * 分流按「市场」而不是「代码形状」：A股个股与场外基金同为 6 位数字，
+   * 只有用户选的市场能区分它们该走腾讯（sh/sz）还是天天基金。
+   */
   const syncQuotes = useCallback(
-    async (codes?: string[], opts: { silent?: boolean } = {}) => {
-      const list = (codes ?? fundCodes).filter((c) => /^\d{6}$/.test(c) || STOCK_CODE_RE.test(c))
-      if (list.length === 0) return
+    async (_codes?: string[], opts: { silent?: boolean } = {}) => {
+      const cnRefs = holdingRefs.filter((r) => r.market !== 'ashare')
+      const ashareCodes = holdingRefs.filter((r) => r.market === 'ashare').map((r) => r.code)
+      const cnList = cnRefs
+        .map((r) => r.code)
+        .filter((c) => /^\d{6}$/.test(c) || STOCK_CODE_RE.test(c))
+      if (cnList.length === 0 && ashareCodes.length === 0) return
       if (inFlight.current) return
       inFlight.current = true
       if (!opts.silent) setSync((s) => ({ ...s, loading: true, lastError: undefined }))
+      const quotes: FundQuote[] = []
+      const errors: string[] = []
+      let source: string | undefined
       try {
-        const map = await fetchFundQuotes(list)
-        const quotes: FundQuote[] = []
-        let source: string | undefined
-        for (const [code, hit] of map) {
-          quotes.push(hit.quote)
-          if (code === list[0]) source = hit.source
+        if (cnList.length > 0) {
+          try {
+            const map = await fetchFundQuotes(cnList)
+            for (const [code, hit] of map) {
+              quotes.push(hit.quote)
+              if (code === cnList[0]) source = hit.source
+            }
+          } catch (e) {
+            errors.push(describeSyncError(e))
+          }
         }
-        dispatch({ type: 'mergeQuotes', quotes, at: Date.now() })
-        setSync({ loading: false, lastSuccessAt: Date.now(), source })
-      } catch (e) {
-        const msg =
-          e instanceof FundServiceError
-            ? `${e.message}${e.attempts.length ? `（${e.attempts.map((a) => a.error).join('；')}）` : ''}`
-            : e instanceof Error
-              ? e.message
-              : '行情同步失败'
-        setSync({ loading: false, lastError: msg })
+        if (ashareCodes.length > 0) {
+          try {
+            const list = await fetchTencentQuotes(ashareCodes, 'ashare')
+            quotes.push(...list)
+            source = source ?? 'tencent-ashare'
+          } catch (e) {
+            errors.push(describeSyncError(e))
+          }
+        }
+        if (quotes.length > 0) dispatch({ type: 'mergeQuotes', quotes, at: Date.now() })
+        if (quotes.length === 0 && errors.length > 0) setSync({ loading: false, lastError: errors.join('；') })
+        else setSync({ loading: false, lastSuccessAt: Date.now(), source })
       } finally {
         inFlight.current = false
       }
     },
-    [fundCodes],
+    [holdingRefs, describeSyncError],
   )
 
   /* ---------- 启动：首屏自动同步一次（有基金时） ---------- */

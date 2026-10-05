@@ -6,6 +6,7 @@ import {
   BarChart3,
   Check,
   GripVertical,
+  HandCoins,
   Landmark,
   LayoutGrid,
   LineChart,
@@ -16,12 +17,23 @@ import {
 import type { Portfolio } from '../types/asset'
 import type { TrendRange, TrendTab } from '../lib/netWorthHistory'
 import { ALL_TREND_TABS, TREND_RANGE_LABEL, TREND_TAB_LABEL } from '../lib/netWorthHistory'
-import type { AppSettings, CashCandidate, FundingSource, HomeBlockId, TrendsConfig } from '../lib/settings'
+import type { FxRates } from '../lib/currency'
+import type {
+  AppSettings,
+  CashCandidate,
+  DividendSettings,
+  FundingSource,
+  HomeBlockId,
+  TrendsConfig,
+} from '../lib/settings'
+import type { UseDividends } from '../hooks/useDividends'
+import DividendPanel from './DividendPanel'
 import { HOME_BLOCK_IDS, HOME_BLOCK_LABEL, currentMonth, formatMonth, isPaydayReached } from '../lib/settings'
 import { arrayMove, dragShifts, dropIndexFromDrag, type RowBox } from '../lib/homeLayout'
-import { formatCNY } from '../lib/format'
+import { formatCNY, todayKey } from '../lib/format'
 import { collectDiagnostics, resolveSafeTopInset } from '../lib/safeArea'
 import Sheet from './Sheet'
+import DepositTargetPicker from './DepositTargetPicker'
 import { StrategySettingsForm, type StrategySettingsFormProps } from './StrategySettingsSheet'
 
 interface SettingsSheetProps {
@@ -38,6 +50,13 @@ interface SettingsSheetProps {
   onNudgeHomeBlock: (id: HomeBlockId, dir: -1 | 1) => void
   /** 「投资策略」页的表单数据与回调（与首页策略卡片的弹层共用同一份） */
   strategyPanel: StrategySettingsFormProps
+  /** 分红页需要的数据与动作 */
+  dividends: UseDividends
+  dividendSettings: DividendSettings
+  onSetDividendSettings: (patch: Partial<DividendSettings>) => void
+  /** 汇率：分红折算成人民币时用 */
+  rates?: FxRates | null
+  notify: (text: string, tone?: 'success' | 'error' | 'info') => void
   onSetFixed: (patch: Partial<AppSettings['salary']['fixed']>) => void
   onUpsertSalary: (month: string, amount: number) => void
   onRemoveSalary: (month: string) => void
@@ -45,12 +64,13 @@ interface SettingsSheetProps {
 }
 
 /** 设置的三级菜单：先进列表，再进具体页面 */
-type Page = 'menu' | 'fund' | 'salary' | 'home' | 'strategy' | 'trends' | 'diagnostics'
+type Page = 'menu' | 'fund' | 'salary' | 'home' | 'dividends' | 'strategy' | 'trends' | 'diagnostics'
 
 const PAGE_META: Record<Exclude<Page, 'menu'>, { title: string; subtitle: string }> = {
   fund: { title: '股票基金申购方式', subtitle: '买入时资金从哪里来' },
   salary: { title: '薪资', subtitle: '每月记录与固定发薪' },
   home: { title: '首页显示', subtitle: '显示哪些区块、按什么顺序' },
+  dividends: { title: '分红', subtitle: '分红日历、待补录与设置' },
   strategy: { title: '投资策略', subtitle: '策略权重、分类映射与再平衡阈值' },
   trends: { title: '走势图', subtitle: '指标、范围与外观' },
   diagnostics: { title: '诊断信息', subtitle: '排查显示问题用' },
@@ -117,6 +137,13 @@ export default function SettingsSheet(props: SettingsSheetProps) {
 
   const meta = page === 'menu' ? null : PAGE_META[page]
 
+  /** 菜单上直接显示本月分红笔数，不用点进去才知道 */
+  const dividendHint = useMemo(() => {
+    const month = todayKey().slice(0, 7)
+    const count = props.dividends.records.filter((r) => r.exDate.startsWith(month)).length
+    return count > 0 ? `本月 ${count} 笔` : '暂无本月分红'
+  }, [props.dividends.records])
+
   return (
     <Sheet
       open={open}
@@ -142,13 +169,22 @@ export default function SettingsSheet(props: SettingsSheetProps) {
       }
     >
       {page === 'menu' ? (
-        <MenuPage settings={props.settings} onGo={setPage} />
+        <MenuPage settings={props.settings} onGo={setPage} dividendHint={dividendHint} />
       ) : page === 'fund' ? (
         <FundPage {...props} />
       ) : page === 'salary' ? (
         <SalaryPage {...props} />
       ) : page === 'home' ? (
         <HomePage {...props} />
+      ) : page === 'dividends' ? (
+        <DividendPanel
+          portfolio={props.portfolio}
+          dividends={props.dividends}
+          rates={props.rates}
+          dividendSettings={props.dividendSettings}
+          onSetDividendSettings={props.onSetDividendSettings}
+          notify={props.notify}
+        />
       ) : page === 'strategy' ? (
         <StrategySettingsForm {...props.strategyPanel} />
       ) : page === 'trends' ? (
@@ -160,7 +196,15 @@ export default function SettingsSheet(props: SettingsSheetProps) {
   )
 }
 
-function MenuPage({ settings, onGo }: { settings: AppSettings; onGo: (p: Page) => void }) {
+function MenuPage({
+  settings,
+  onGo,
+  dividendHint,
+}: {
+  settings: AppSettings
+  onGo: (p: Page) => void
+  dividendHint?: string
+}) {
   const items: Array<{
     key: Exclude<Page, 'menu'>
     icon: typeof BarChart3
@@ -188,6 +232,13 @@ function MenuPage({ settings, onGo }: { settings: AppSettings; onGo: (p: Page) =
       title: '首页显示',
       desc: '显示哪些区块、按什么顺序',
       state: `${HOME_BLOCK_IDS.filter((id) => settings.home.visible[id]).length} / ${HOME_BLOCK_IDS.length} 个区块`,
+    },
+    {
+      key: 'dividends',
+      icon: HandCoins,
+      title: '分红',
+      desc: '分红日历、待补录与设置',
+      state: dividendHint ?? '查看',
     },
     {
       key: 'strategy',
@@ -358,7 +409,7 @@ function FundPage({ settings, candidates, onSetFundDefault, onSetFundingSource }
 
 function SalaryPage({
   settings,
-  candidates,
+  portfolio,
   onSetFixed,
   onUpsertSalary,
   onRemoveSalary,
@@ -481,10 +532,10 @@ function SalaryPage({
             </div>
 
             <div>
-              <p className="field-label">发薪后写入哪个项目</p>
-              <SourcePicker
+              <p className="field-label">发薪后写入哪个账户</p>
+              <DepositTargetPicker
                 testId="salary-fixed-target"
-                candidates={candidates}
+                portfolio={portfolio}
                 value={settings.salary.fixed.target}
                 onChange={(s) => onSetFixed({ target: s })}
               />

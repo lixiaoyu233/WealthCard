@@ -6,8 +6,9 @@ import {
   resolveStrategy,
 } from '../lib/rebalance'
 import { type AppSettings, createDefaultSettings } from '../lib/settings'
-import type { Portfolio } from '../types/asset'
+import type { Category, Portfolio } from '../types/asset'
 import App from '../App'
+import { makeDividends } from '../test/fixtures'
 import SettingsSheet, { HomePage } from './SettingsSheet'
 import StrategySettingsSheet from './StrategySettingsSheet'
 
@@ -291,6 +292,11 @@ describe('设置菜单', () => {
     onSetHomeOrder: noop,
     onNudgeHomeBlock: noop,
     strategyPanel,
+    dividends: makeDividends(),
+    dividendSettings: createDefaultSettings().dividends,
+    onSetDividendSettings: noop,
+    rates: null,
+    notify: noop,
     onSetFixed: noop,
     onUpsertSalary: noop,
     onRemoveSalary: noop,
@@ -330,6 +336,31 @@ describe('设置菜单', () => {
       <StrategySettingsSheet open={false} onClose={noop} defaultMapping={{}} {...strategyPanel} />,
     )
     expect(closed.container.innerHTML).toBe('')
+  })
+
+  it('薪资页的「写入哪个账户」用新选择框：余额 0 的现金条目也能选（回归）', () => {
+    const cash: Category = {
+      id: 'cat_cash',
+      name: '现金与固定资产',
+      subtitle: '',
+      icon: 'wallet',
+      color: 'x',
+      items: [{ id: '招行活期', kind: 'amount', name: '招行活期', amount: 0 }],
+    }
+    const settings = {
+      ...sheetProps.settings,
+      salary: { ...sheetProps.settings.salary, fixed: { ...sheetProps.settings.salary.fixed, enabled: true } },
+    }
+    render(
+      <SettingsSheet
+        {...sheetProps}
+        settings={settings}
+        portfolio={{ version: 2, categories: [cash], history: [] }}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('settings-menu-salary'))
+    expect(screen.getByTestId('salary-fixed-target')).toBeTruthy()
+    expect(screen.getByRole('option', { name: /招行活期/ })).toBeTruthy()
   })
 
   it('走势图页不再有显示开关，改为指向「首页显示」', () => {

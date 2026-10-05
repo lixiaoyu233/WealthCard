@@ -18,6 +18,7 @@ import Toast, { type ToastMessage, type ToastTone } from './components/Toast'
 import { useStrategy } from './hooks/useStrategy'
 import { useTheme } from './hooks/useTheme'
 import { useSettings } from './hooks/useSettings'
+import { useDividends } from './hooks/useDividends'
 import { formatMonth, type HomeBlockId } from './lib/settings'
 import { advanceSnapshot } from './lib/netWorthHistory'
 import { resolveSafeTopInset } from './lib/safeArea'
@@ -64,6 +65,16 @@ export default function App() {
 
   /** 策略与再平衡（纯前端计算，配置单独持久化） */
   const strategyState = useStrategy(portfolio)
+
+  /**
+   * 分红：A股走东财自动抓取，其余市场手工录入。
+   * 入账会改动持仓/现金，所以把新的组合写回 portfolio。
+   */
+  const dividendsState = useDividends(portfolio, (next) => importPortfolio(next), {
+    rates: fx.rates,
+    taxUs: settingsState.settings.dividends.usTaxRate,
+    taxHk: settingsState.settings.dividends.hkTaxRate,
+  })
 
   /**
    * 总资产月度快照：数据一变就更新当月；每月第一次打开时把上月定稿。
@@ -536,6 +547,11 @@ export default function App() {
         onSetHomeOrder={settingsState.setHomeOrder}
         onNudgeHomeBlock={settingsState.nudgeHomeBlock}
         strategyPanel={strategyFormProps}
+        dividends={dividendsState}
+        dividendSettings={settingsState.settings.dividends}
+        onSetDividendSettings={settingsState.setDividendSettings}
+        rates={fx.rates}
+        notify={notify}
         onSetFixed={settingsState.setFixed}
         onUpsertSalary={(month, amount) => {
           settingsState.upsertSalary(month, amount)

@@ -3,13 +3,28 @@ import { Calculator, Loader2, RefreshCw, Trash2 } from 'lucide-react'
 import type { AssetItem, Category, FundQuote } from '../types/asset'
 import { CURRENCIES, type CurrencyCode, type FxRates, isCurrencyCode, scaleHint, toCny } from '../lib/currency'
 import { defaultItemKind, isFund, isGold, parseAmount } from '../lib/calc'
-import { HOLDING_MARKET_CURRENCY, detectStockMarket } from '../lib/usStock'
+import {
+  HOLDING_MARKET_CURRENCY,
+  HOLDING_MARKET_LABEL,
+  detectStockMarket,
+  fetchTencentQuotes,
+  type HoldingMarket,
+} from '../lib/usStock'
 import type { CashCandidate, FundingSource } from '../lib/settings'
 import { findCandidate } from '../lib/settings'
 import { formatCNY, formatNav, formatRate, formatSigned } from '../lib/format'
 import { makeAmountItem, makeFundItem, makeGoldItem } from '../hooks/usePortfolio'
 import { fetchFundQuotes } from '../lib/fundService'
 import NumberPad from './NumberPad'
+
+/** 各市场的代码要求文案（校验与提示共用） */
+function codeRequirement(market: HoldingMarket, allowStock: boolean): string {
+  if (!allowStock) return '请输入 6 位基金代码'
+  if (market === 'ashare') return 'A股请填 6 位数字代码（如 600519、000001）'
+  if (market === 'us') return '美股请填字母代码（如 SPY、QQQ）'
+  if (market === 'hk') return '港股请填 1~5 位数字（如 00700）'
+  return '场外基金请填 6 位数字（如 161725）'
+}
 
 interface ItemFormProps {
   category: Category
@@ -177,16 +192,35 @@ export default function ItemForm({
   const [quote, setQuote] = useState<FundQuote | undefined>(initial && isFund(initial) ? initial.quote : undefined)
   const [quoteLoading, setQuoteLoading] = useState(false)
   const [quoteError, setQuoteError] = useState<string | null>(null)
+  /** 市场选择：默认自动识别；A股与场外基金代码同形，必须能手动指定 */
+  const [marketPick, setMarketPick] = useState<HoldingMarket | 'auto'>('auto')
   /** 记录查失败的代码，避免自动重试打爆接口 */
   const failedCodeRef = useRef<string>('')
   const nameTouched = useRef(false)
 
   const isFundKind = kind === 'fund'
   const isGoldKind = kind === 'gold'
-  /** 非纯基金分类时，代码可以是美股/港股 */
+  /** 非纯基金分类时，代码可以是 A股 / 美股 / 港股 */
   const allowStockCode = !/基金/.test(category.name)
-  /** 根据已输入的代码推断市场（美股/港股），用于币种提示与校验 */
-  const detectedMarket = allowStockCode ? detectStockMarket(code) : isFundKind ? 'cn' : null
+  /**
+   * 生效市场：用户显式选择优先，否则按代码形状推断。
+   * A股个股与场外基金代码**同形**（都是 6 位数字），推断不出来，所以必须能手动指定。
+   */
+  const effectiveMarket: HoldingMarket =
+    marketPick !== 'auto'
+      ? marketPick
+      : allowStockCode
+        ? // 股票类分类里的 6 位数字默认按「A股 / 场内」处理：
+          // A股个股与场内 ETF/LOF 都是 6 位数字，走腾讯 sh/sz 都拿得到。
+          (detectStockMarket(code) ?? (/^\d{6}$/.test(code) ? 'ashare' : 'cn'))
+        : 'cn'
+  /** 该市场下代码格式是否合法 */
+  const codeOkForMarket = (m: HoldingMarket, c: string): boolean =>
+    m === 'us'
+      ? /^[A-Za-z][A-Za-z.\-]{0,5}$/.test(c.trim())
+      : m === 'hk'
+        ? /^\d{1,5}$/.test(c.trim())
+        : /^\d{6}$/.test(c.trim())
   /** 用户是否填了手动净值 */
   const manualNavValue = (() => {
     const m = parseAmount(manualNav)
@@ -206,18 +240,26 @@ export default function ItemForm({
 
   /* ---------------- 基金代码变化：自动查询一次名称与净值 ---------------- */
   const validCode = /^\d{6}$/.test(code)
+  /** 代码是否已填到可以查询 */
+  const codeReady =
+    effectiveMarket === 'cn' || effectiveMarket === 'ashare' ? validCode : code.trim().length >= 2
 
   const loadQuote = async (silent = false) => {
-    const ok = allowStockCode ? code.trim().length >= 2 : validCode
-    if (!ok) {
-      if (!silent) setQuoteError(allowStockCode ? '请输入基金代码或美股/港股代码' : '请输入 6 位基金代码')
+    if (!codeReady) {
+      if (!silent) setQuoteError(codeRequirement(effectiveMarket, allowStockCode))
       return
     }
     setQuoteLoading(true)
     setQuoteError(null)
     try {
-      const map = await fetchFundQuotes([code])
-      const hit = map.get(code)
+      // A股走腾讯行情（sh/sz 前缀）；拿去问场外基金接口只会查不到
+      let hit: { quote: FundQuote } | undefined
+      if (effectiveMarket === 'ashare') {
+        const quotes = await fetchTencentQuotes([code.trim()], 'ashare')
+        hit = quotes[0] ? { quote: quotes[0] } : undefined
+      } else {
+        hit = (await fetchFundQuotes([code])).get(code)
+      }
       if (!hit) {
         /**
          * 接口对不存在的代码会返回 `Datas: null`（HTTP 200），
@@ -243,14 +285,12 @@ export default function ItemForm({
   }
 
   useEffect(() => {
-    // 境内基金要求 6 位数字；股票分类接受美股/港股代码
-    const ready = allowStockCode ? code.trim().length >= 2 : validCode
     // 已手动填净值时不再自动查询，尊重用户输入
-    if (!isFundKind || !ready || editing || manualNavValue) return
+    if (!isFundKind || !codeReady || editing || manualNavValue) return
     const timer = window.setTimeout(() => void loadQuote(true), 600)
     return () => window.clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [code, isFundKind, manualNavValue])
+  }, [code, isFundKind, manualNavValue, effectiveMarket])
 
   /* ---------------- 实时预览 ---------------- */
   const preview = useMemo(() => {
@@ -279,13 +319,11 @@ export default function ItemForm({
 
     if (isFundKind) {
       // 境内基金要求 6 位数字；股票分类允许美股（SPY）与港股（00700）
-      const isMarketCode = allowStockCode && detectStockMarket(code) !== null
+      const isMarketCode = allowStockCode && codeOkForMarket(effectiveMarket, code)
       // 手动填了净值就允许没有代码（例如买了查不到的自营/银行理财）
-      if (!manualNavValue && !validCode && !isMarketCode) {
+      if (!manualNavValue && !isMarketCode) {
         return setError(
-          allowStockCode
-            ? '代码格式不对：境内基金填 6 位数字，美股/美股ETF 填字母代码（如 SPY、QQQ），港股填数字（如 00700）'
-            : '基金代码必须是 6 位数字',
+          allowStockCode ? '代码格式不对：' + codeRequirement(effectiveMarket, true) : '基金代码必须是 6 位数字',
         )
       }
       const s = parseAmount(shares)
@@ -297,8 +335,8 @@ export default function ItemForm({
         // 用户没填名称、且自动查询还没回来时，退回基金全称 / 代码，避免出现无名条目
         name: name.trim() || quote?.name || code || '未命名持仓',
         code,
-        // 记录市场：决定计价币种（境内 CNY / 美股 USD / 港股 HKD）
-        market: quote?.market ?? detectedMarket ?? 'cn',
+        // 记录市场：决定计价币种与行情来源。用户显式选的优先，避免 A股被当成场外基金
+        market: effectiveMarket,
         shares: s,
         costNav: c,
         manualNav: manualNavValue ?? undefined,
@@ -377,7 +415,7 @@ export default function ItemForm({
     return (
       <div>
         <label className="field-label">
-          {field === 'costNav' && detectedMarket && detectedMarket !== 'cn' ? '成本单价（原币）' : meta.label}
+          {field === 'costNav' && effectiveMarket !== 'cn' ? '成本单价（原币）' : meta.label}
         </label>
         <div className="relative">
           <input
@@ -397,7 +435,20 @@ export default function ItemForm({
           </button>
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-ink4">
-          {meta.unit ? <span>单位：{field === 'costNav' && detectedMarket ? (detectedMarket === 'us' ? 'USD/股' : detectedMarket === 'hk' ? 'HKD/股' : meta.unit) : meta.unit}</span> : null}
+          {meta.unit ? (
+            <span>
+              单位：
+              {field === 'costNav'
+                ? effectiveMarket === 'us'
+                  ? 'USD/股'
+                  : effectiveMarket === 'hk'
+                    ? 'HKD/股'
+                    : effectiveMarket === 'ashare'
+                      ? 'CNY/股'
+                      : meta.unit
+                : meta.unit}
+            </span>
+          ) : null}
           {/* 量级提示：让用户一眼看出「最大那位是万还是十万」 */}
           {showScale && hint && hint.label !== '元' ? (
             <span className="rounded-full border border-line px-1.5 py-0.5 text-ink3">
@@ -433,8 +484,7 @@ export default function ItemForm({
     const sh = parseAmount(shares)
     const c = parseAmount(costNav)
     if (!Number.isFinite(sh) || sh <= 0 || !Number.isFinite(c) || c < 0) return null
-    const market = detectedMarket ?? 'cn'
-    const cny = toCny(sh * c, HOLDING_MARKET_CURRENCY[market] ?? 'CNY', rates)
+    const cny = toCny(sh * c, HOLDING_MARKET_CURRENCY[effectiveMarket] ?? 'CNY', rates)
     return cny === undefined ? sh * c : cny
   })()
 
@@ -501,10 +551,40 @@ export default function ItemForm({
         </div>
       ) : null}
 
+      {isFundKind && allowStockCode ? (
+        <div>
+          <label className="field-label" htmlFor="fund-market">
+            市场
+          </label>
+          <select
+            id="fund-market"
+            data-testid="fund-market"
+            value={marketPick}
+            onChange={(e) => {
+              setMarketPick(e.target.value as HoldingMarket | 'auto')
+              // 换市场后旧行情不再适用，清掉重新查
+              setQuote(undefined)
+              setQuoteError(null)
+            }}
+            className="field-input"
+          >
+            <option value="auto">自动识别</option>
+            <option value="cn">境内场外基金</option>
+            <option value="ashare">A股</option>
+            <option value="us">美股 / 美股 ETF</option>
+            <option value="hk">港股</option>
+          </select>
+          <p className="mt-1 text-[11px] leading-relaxed text-ink4">
+            A股个股、场内 ETF 与场外基金的代码都是 6 位数字，无法自动区分：
+            这里默认按「A股 / 场内」处理（走腾讯 sh/sz）；要记的是场外基金请在上方选「境内场外基金」。
+          </p>
+        </div>
+      ) : null}
+
       {isFundKind ? (
         <div>
           <label className="field-label" htmlFor="fund-code">
-            {allowStockCode ? '代码（基金 6 位数字 / 美股字母 / 港股数字）' : '基金代码（6 位数字，填完自动查净值）'}
+            {allowStockCode ? '代码' : '基金代码（6 位数字，填完自动查净值）'}
           </label>
           <div className="flex gap-2">
             <input
@@ -547,10 +627,12 @@ export default function ItemForm({
           <p className="mt-1 text-[11px] leading-relaxed text-ink4">
             {allowStockCode ? (
               <>
-                支持三类：境内基金（6 位数字，如 161725）、美股 / 美股 ETF（字母，如 SPY、QQQ）、港股（数字，如 00700）。
+                支持四类：场外基金（6 位数字，如 161725）、A股（6 位数字，如 600519）、
+                美股 / 美股 ETF（字母，如 SPY、QQQ）、港股（数字，如 00700）。
                 <br />
-                美股按 <span className="text-ink2">USD</span>、港股按 <span className="text-ink2">HKD</span>
-                计价，再用实时汇率折算成人民币。
+                场外基金与 A股按 <span className="text-ink2">CNY</span> 计价；美股按{' '}
+                <span className="text-ink2">USD</span>、港股按 <span className="text-ink2">HKD</span>
+                ，再用实时汇率折算成人民币。
               </>
             ) : (
               <>
@@ -564,12 +646,14 @@ export default function ItemForm({
       ) : null}
 
       {/* 识别到的市场提示：让用户确认代码被正确理解 */}
-      {isFundKind && detectedMarket && detectedMarket !== 'cn' ? (
+      {isFundKind && effectiveMarket !== 'cn' ? (
         <p className="flex items-center gap-1.5 text-[11.5px] tone-info" data-testid="market-hint">
           <span className="rounded-full border px-1.5 py-0.5" style={{ borderColor: 'currentColor' }}>
-            {detectedMarket === 'us' ? '美股' : '港股'}
+            {HOLDING_MARKET_LABEL[effectiveMarket]}
           </span>
-          将按 {HOLDING_MARKET_CURRENCY[detectedMarket]} 计价，并用实时汇率折算成人民币
+          {effectiveMarket === 'ashare'
+            ? '人民币计价，行情走 A股（腾讯 sh/sz）'
+            : `将按 ${HOLDING_MARKET_CURRENCY[effectiveMarket]} 计价，并用实时汇率折算成人民币`}
         </p>
       ) : null}
 

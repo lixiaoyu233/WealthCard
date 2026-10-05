@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Portfolio } from '../types/asset'
+import type { AssetItem, Category, Portfolio } from '../types/asset'
 import {
   type AppSettings,
   applySalaryToPortfolio,
@@ -7,7 +7,9 @@ import {
   currentMonth,
   formatMonth,
   isPaydayReached,
+  diagnoseDepositTargets,
   listCashCandidates,
+  listDepositTargets,
   moveHomeBlock,
   normalizeHomeOrder,
   normalizeSettings,
@@ -215,6 +217,85 @@ describe('是否应自动入账', () => {
 
   it('没有该月记录就不写入（避免凭空加钱）', () => {
     expect(shouldAutoApply(base({ records: [] }), '2026-10', new Date(2026, 9, 20))).toBe(false)
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * 入账目标（薪资 / 分红写入现金项）
+ * ------------------------------------------------------------------ */
+describe('listDepositTargets：可入账的现金项目', () => {
+  const item = (id: string, kind: 'amount' | 'fund', amount = 0): AssetItem =>
+    kind === 'amount'
+      ? { id, kind: 'amount', name: id, amount }
+      : { id, kind: 'fund', name: id, code: '161725', shares: 1, costNav: 1 }
+  const cat = (id: string, name: string, items: AssetItem[], isLiability = false): Category =>
+    ({ id, name, subtitle: '', icon: 'wallet', color: 'x', isLiability, items })
+  const pf = (categories: Category[]): Portfolio => ({ version: 2, categories, history: [] })
+
+  it('★ 余额为 0 也能选（新建账户最常见的情况，旧规则会漏掉）', () => {
+    const targets = listDepositTargets(pf([cat('cat_cash', '现金与固定资产', [item('招行活期', 'amount', 0)])]))
+    expect(targets.map((t) => t.itemName)).toEqual(['招行活期'])
+  })
+
+  it('余额为负也能选（信用卡等）', () => {
+    const targets = listDepositTargets(pf([cat('cat_cash', '现金与固定资产', [item('信用卡', 'amount', -200)])]))
+    expect(targets).toHaveLength(1)
+  })
+
+  it('只列「现金与固定资产」这一个分类，其他分类即使有金额类也不列', () => {
+    const targets = listDepositTargets(
+      pf([
+        cat('cat_cash', '现金与固定资产', [item('招行活期', 'amount', 100)]),
+        cat('cat_diy', '我的钱包', [item('微信零钱', 'amount', 50)]),
+      ]),
+    )
+    expect(targets.map((t) => t.itemName)).toEqual(['招行活期'])
+  })
+
+  it('基金/黄金形态的条目不列（它们不是现金账户）', () => {
+    const targets = listDepositTargets(pf([cat('cat_cash', '现金与固定资产', [item('某基金', 'fund')])]))
+    expect(targets).toEqual([])
+  })
+
+  it('diagnose：分类被删 / 只有非金额类，都能说清原因', () => {
+    expect(diagnoseDepositTargets(pf([]))).toEqual({ categoryFound: false, itemCount: 0, amountItemCount: 0 })
+    const d = diagnoseDepositTargets(pf([cat('cat_cash', '现金与固定资产', [item('某基金', 'fund')])]))
+    expect(d).toEqual({ categoryFound: true, categoryName: '现金与固定资产', itemCount: 1, amountItemCount: 0 })
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * 分红设置
+ * ------------------------------------------------------------------ */
+describe('分红设置', () => {
+  it('默认：税率 10%，默认现金分红，无默认账户', () => {
+    const s = createDefaultSettings().dividends
+    expect(s.usTaxRate).toBe(0.1)
+    expect(s.hkTaxRate).toBe(0.1)
+    expect(s.defaultMode).toBe('cash')
+    expect(s.defaultCashTarget).toBeUndefined()
+  })
+
+  it('老数据没有 dividends 字段时回落默认', () => {
+    const s = normalizeSettings({ version: 1 }).dividends
+    expect(s).toEqual({ usTaxRate: 0.1, hkTaxRate: 0.1, defaultMode: 'cash', defaultCashTarget: undefined })
+  })
+
+  it('税率越界或脏数据回落默认，账户能读出来', () => {
+    const s = normalizeSettings({
+      dividends: { usTaxRate: 3, hkTaxRate: -1, defaultMode: 'xxx', defaultCashTarget: { categoryId: 'cat_cash', itemId: 'i1', itemName: '招行活期' } },
+    }).dividends
+    expect(s.usTaxRate).toBe(0.1)
+    expect(s.hkTaxRate).toBe(0.1)
+    expect(s.defaultMode).toBe('cash')
+    expect(s.defaultCashTarget).toEqual({ categoryId: 'cat_cash', itemId: 'i1', itemName: '招行活期' })
+  })
+
+  it('再投资方式与合法税率会被保留', () => {
+    const s = normalizeSettings({ dividends: { usTaxRate: 0.3, hkTaxRate: 0, defaultMode: 'reinvest' } }).dividends
+    expect(s.usTaxRate).toBe(0.3)
+    expect(s.hkTaxRate).toBe(0)
+    expect(s.defaultMode).toBe('reinvest')
   })
 })
 

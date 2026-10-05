@@ -19,11 +19,14 @@
 
 import type { FundQuote } from '../types/asset'
 
-/** 需要走腾讯行情接口的市场 */
+/** 需要走腾讯行情接口的海外市场 */
 export type StockMarket = 'us' | 'hk'
 
-/** 持仓市场的完整取值：境内基金 + 美股 + 港股 */
-export type HoldingMarket = 'cn' | StockMarket
+/** 持仓市场的完整取值：境内场外基金 / A股个股 / 美股 / 港股 */
+export type HoldingMarket = 'cn' | 'ashare' | StockMarket
+
+/** 走腾讯行情的市场（A股的符号需要带 sh/sz/bj 前缀） */
+export type TencentMarket = StockMarket | 'ashare'
 
 export const STOCK_MARKET_LABEL: Record<StockMarket, string> = {
   us: '美股',
@@ -32,13 +35,15 @@ export const STOCK_MARKET_LABEL: Record<StockMarket, string> = {
 
 export const HOLDING_MARKET_LABEL: Record<HoldingMarket, string> = {
   cn: '境内基金',
+  ashare: 'A股',
   us: '美股',
   hk: '港股',
 }
 
-/** 各市场的计价币种 */
+/** 各市场的计价币种（A股与境内基金都是人民币） */
 export const HOLDING_MARKET_CURRENCY: Record<HoldingMarket, 'CNY' | 'USD' | 'HKD'> = {
   cn: 'CNY',
+  ashare: 'CNY',
   us: 'USD',
   hk: 'HKD',
 }
@@ -83,9 +88,27 @@ export function detectStockMarket(code: string): StockMarket | null {
   return null
 }
 
-/** 规范化为腾讯接口的查询符号，如 SPY -> usSPY、700 -> hk00700 */
-export function toTencentSymbol(code: string, market: StockMarket): string {
-  return market === 'us' ? `us${code.trim().toUpperCase()}` : `hk${normalizeHkCode(code)}`
+/**
+ * A股代码是 6 位数字，与场外基金代码**同形**（000001 既是平安银行、也是华夏成长），
+ * 所以不能靠代码推断市场，必须由用户在表单里显式选择。
+ */
+export function isAshareCode(code: string): boolean {
+  return /^\d{6}$/.test(code.trim())
+}
+
+/** A股交易所前缀：沪 sh / 深 sz / 北交所 bj */
+export function ashareExchange(code: string): 'sh' | 'sz' | 'bj' {
+  const c = code.trim()
+  if (/^[69]/.test(c)) return 'sh'
+  if (/^[023]/.test(c)) return 'sz'
+  return 'bj'
+}
+
+/** 规范化为腾讯接口的查询符号，如 SPY -> usSPY、700 -> hk00700、600519 -> sh600519 */
+export function toTencentSymbol(code: string, market: TencentMarket): string {
+  if (market === 'us') return `us${code.trim().toUpperCase()}`
+  if (market === 'ashare') return `${ashareExchange(code)}${code.trim()}`
+  return `hk${normalizeHkCode(code)}`
 }
 
 /* ------------------------------------------------------------------ *
@@ -118,13 +141,14 @@ function normalizeTime(raw: string | undefined): string | undefined {
  * @param text 已按 GBK 解码为字符串的响应体
  * @param market 该批代码所属市场
  */
-export function parseTencentQuotes(text: string, market: StockMarket): FundQuote[] {
+export function parseTencentQuotes(text: string, market: TencentMarket): FundQuote[] {
   const now = Date.now()
-  const currency = STOCK_MARKET_CURRENCY[market]
+  const currency: 'CNY' | 'USD' | 'HKD' = market === 'us' ? 'USD' : market === 'hk' ? 'HKD' : 'CNY'
+  const source = market === 'us' ? 'tencent-us' : market === 'hk' ? 'tencent-hk' : 'tencent-ashare'
   const out: FundQuote[] = []
 
   for (const line of text.split('\n')) {
-    const m = line.match(/v_(us|hk)([A-Za-z0-9.\-]+)\s*=\s*"([^"]*)"/)
+    const m = line.match(/v_(us|hk|sh|sz|bj)([A-Za-z0-9.\-]+)\s*=\s*"([^"]*)"/)
     if (!m) continue
     const parts = m[3].split('~')
     if (parts.length < 35) continue
@@ -144,7 +168,7 @@ export function parseTencentQuotes(text: string, market: StockMarket): FundQuote
       // 昨收作为参考，便于未来算日内涨跌
       publishedNav: num(parts[4]),
       fetchedAt: now,
-      source: market === 'us' ? 'tencent-us' : 'tencent-hk',
+      source,
       market,
       currency,
     })
@@ -167,14 +191,14 @@ export async function decodeTencentResponse(res: Response): Promise<string> {
   }
 }
 
-export function buildTencentUrl(codes: string[], market: StockMarket): string {
+export function buildTencentUrl(codes: string[], market: TencentMarket): string {
   const symbols = codes.map((c) => toTencentSymbol(c, market)).join(',')
   return `${TENCENT_QUOTE_ENDPOINT}${symbols}&_=${Date.now()}`
 }
 
 export async function fetchTencentQuotes(
   codes: string[],
-  market: StockMarket,
+  market: TencentMarket,
   timeout = 12_000,
 ): Promise<FundQuote[]> {
   const controller = new AbortController()
