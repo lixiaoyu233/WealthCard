@@ -27,7 +27,11 @@ export default defineConfig({
     target: 'es2019',
   },
   test: {
+    // 默认 node：纯函数与存储相关的用例跑得快
     environment: 'node',
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.{ts,tsx}'],
+    // 组件用例在文件头用 `// @vitest-environment jsdom` 单独切换；
+    // 浏览器 API 的替身集中在 setup 里
+    setupFiles: ['./src/test/setup.ts'],
   },
 })

@@ -8,6 +8,8 @@ import {
   formatMonth,
   isPaydayReached,
   listCashCandidates,
+  moveHomeBlock,
+  normalizeHomeOrder,
   normalizeSettings,
   shouldAutoApply,
 } from './settings'
@@ -213,5 +215,77 @@ describe('是否应自动入账', () => {
 
   it('没有该月记录就不写入（避免凭空加钱）', () => {
     expect(shouldAutoApply(base({ records: [] }), '2026-10', new Date(2026, 9, 20))).toBe(false)
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * 首页显示配置（设置 → 首页显示）
+ * ------------------------------------------------------------------ */
+describe('首页显示配置', () => {
+  it('默认：持仓总盈亏打开，投资策略与走势关闭；顺序为 持仓总盈亏 → 投资策略 → 走势', () => {
+    const s = createDefaultSettings()
+    expect(s.home.order).toEqual(['holdingsProfit', 'strategy', 'trends'])
+    expect(s.home.visible).toEqual({ holdingsProfit: true, strategy: false, trends: false })
+  })
+
+  it('老数据没有 home：走势的开关沿用原来的 trends.enabled / 旧字段', () => {
+    expect(normalizeSettings({ trends: { enabled: true } }).home.visible.trends).toBe(true)
+    expect(normalizeSettings({ trends: { enabled: false } }).home.visible.trends).toBe(false)
+    // v1 的顶层开关与 salary.showChart 也要迁移
+    expect(normalizeSettings({ trendsEnabled: true }).home.visible.trends).toBe(true)
+    expect(normalizeSettings({ salary: { showChart: true } }).home.visible.trends).toBe(true)
+  })
+
+  it('老数据没有 home 时其余区块用默认值（投资策略默认关闭，对所有人生效）', () => {
+    const s = normalizeSettings({ trends: { enabled: true } })
+    expect(s.home.visible.holdingsProfit).toBe(true)
+    expect(s.home.visible.strategy).toBe(false)
+  })
+
+  it('home 存在时以它为准，并把旧的 trends.enabled 同步成同一个值（回滚旧版本不丢设置）', () => {
+    const s = normalizeSettings({
+      trends: { enabled: true },
+      home: {
+        order: ['trends', 'strategy', 'holdingsProfit'],
+        visible: { trends: false, strategy: true, holdingsProfit: false },
+      },
+    })
+    expect(s.home.order).toEqual(['trends', 'strategy', 'holdingsProfit'])
+    expect(s.home.visible).toEqual({ trends: false, strategy: true, holdingsProfit: false })
+    expect(s.trends.enabled).toBe(false)
+  })
+
+  it('顺序里的未知项与重复项丢弃，缺失项按默认顺序补到末尾', () => {
+    expect(normalizeHomeOrder(['trends', 'reits', 'trends'])).toEqual(['trends', 'holdingsProfit', 'strategy'])
+    expect(normalizeHomeOrder(undefined)).toEqual(['holdingsProfit', 'strategy', 'trends'])
+    expect(normalizeHomeOrder('bogus')).toEqual(['holdingsProfit', 'strategy', 'trends'])
+    // 以后新增区块（如分红日历）会被追加到末尾，不会因为存过顺序就丢
+    expect(normalizeSettings({ home: { order: ['strategy'] } }).home.order).toEqual([
+      'strategy',
+      'holdingsProfit',
+      'trends',
+    ])
+  })
+
+  it('脏数据不崩：home / visible 不是对象时回落默认', () => {
+    expect(normalizeSettings({ home: 'x' }).home.order).toEqual(['holdingsProfit', 'strategy', 'trends'])
+    expect(normalizeSettings({ home: { order: 3, visible: 7 } }).home.visible).toEqual({
+      holdingsProfit: true,
+      strategy: false,
+      trends: false,
+    })
+    expect(normalizeSettings({ home: { visible: { strategy: true } } }).home.visible).toEqual({
+      holdingsProfit: true,
+      strategy: true,
+      trends: false,
+    })
+  })
+
+  it('moveHomeBlock：上移下移正常，越界原样返回', () => {
+    const order = ['holdingsProfit', 'strategy', 'trends'] as const
+    expect(moveHomeBlock([...order], 'strategy', -1)).toEqual(['strategy', 'holdingsProfit', 'trends'])
+    expect(moveHomeBlock([...order], 'strategy', 1)).toEqual(['holdingsProfit', 'trends', 'strategy'])
+    expect(moveHomeBlock([...order], 'holdingsProfit', -1)).toEqual([...order])
+    expect(moveHomeBlock([...order], 'trends', 1)).toEqual([...order])
   })
 })

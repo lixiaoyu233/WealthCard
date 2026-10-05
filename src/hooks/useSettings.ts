@@ -5,12 +5,15 @@ import {
   type AppSettings,
   type FixedSalary,
   type FundingSource,
+  type HomeBlockId,
   type SalaryRecord,
   applySalaryToPortfolio,
   createDefaultSettings,
   currentMonth,
   listCashCandidates,
   loadSettings,
+  moveHomeBlock,
+  normalizeHomeOrder,
   normalizeSettings,
   saveSettings,
   shouldAutoApply,
@@ -55,6 +58,27 @@ export function useSettings(portfolio: Portfolio, applyPortfolio: (p: Portfolio)
 
   const setTrends = useCallback((patch: Partial<AppSettings['trends']>) => {
     setSettings((s) => ({ ...s, trends: { ...s.trends, ...patch } }))
+  }, [])
+
+  /**
+   * 首页区块开关。走势面板的「是否显示」同步写回旧的 trends.enabled，
+   * 保证回滚到旧版本时用户的开关不丢。
+   */
+  const setHomeVisible = useCallback((id: HomeBlockId, visible: boolean) => {
+    setSettings((s) => ({
+      ...s,
+      home: { ...s.home, visible: { ...s.home.visible, [id]: visible } },
+      trends: id === 'trends' ? { ...s.trends, enabled: visible } : s.trends,
+    }))
+  }, [])
+
+  /** 首页区块顺序（拖拽落位与 ↑↓ 按钮共用） */
+  const setHomeOrder = useCallback((order: HomeBlockId[]) => {
+    setSettings((s) => ({ ...s, home: { ...s.home, order: normalizeHomeOrder(order) } }))
+  }, [])
+
+  const nudgeHomeBlock = useCallback((id: HomeBlockId, dir: -1 | 1) => {
+    setSettings((s) => ({ ...s, home: { ...s.home, order: moveHomeBlock(s.home.order, id, dir) } }))
   }, [])
 
   const setFixed = useCallback((patch: Partial<FixedSalary>) => {
@@ -149,6 +173,9 @@ export function useSettings(portfolio: Portfolio, applyPortfolio: (p: Portfolio)
     setFundDefault,
     setFundingSource,
     setTrends,
+    setHomeVisible,
+    setHomeOrder,
+    nudgeHomeBlock,
     setFixed,
     upsertSalary,
     removeSalary,

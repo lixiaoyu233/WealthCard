@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Download, Plus, RotateCcw, ShieldCheck, TrendingDown, TrendingUp, TriangleAlert } from 'lucide-react'
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { Download, Minus, Plus, RotateCcw, ShieldCheck, TrendingDown, TrendingUp, TriangleAlert } from 'lucide-react'
 import type { AssetItem, Category } from './types/asset'
 import { usePortfolio } from './hooks/usePortfolio'
 import { isFund, valuate } from './lib/calc'
@@ -18,7 +18,7 @@ import Toast, { type ToastMessage, type ToastTone } from './components/Toast'
 import { useStrategy } from './hooks/useStrategy'
 import { useTheme } from './hooks/useTheme'
 import { useSettings } from './hooks/useSettings'
-import { formatMonth } from './lib/settings'
+import { formatMonth, type HomeBlockId } from './lib/settings'
 import { advanceSnapshot } from './lib/netWorthHistory'
 import { resolveSafeTopInset } from './lib/safeArea'
 import { categoryTotal } from './lib/calc'
@@ -148,16 +148,18 @@ export default function App() {
     let profit = 0
     let cost = 0
     let items = 0
+    let holdings = 0
     for (const c of portfolio.categories) {
       for (const item of c.items) {
         items += 1
         if (!isFund(item)) continue
+        holdings += 1
         const v = valuate(item)
         profit += v.profit ?? 0
         cost += v.cost ?? 0
       }
     }
-    return { profit, cost, items, rate: cost > 0 ? profit / cost : 0 }
+    return { profit, cost, items, holdings, rate: cost > 0 ? profit / cost : 0 }
   }, [portfolio])
 
   /* ---------------- 事件 ---------------- */
@@ -231,6 +233,107 @@ export default function App() {
   }
 
   const settingsOpen = categoryForm.open && !categoryForm.initial
+
+  /** 有持仓才用涨跌配色；0 持仓保持中性，避免出现「0 元却是绿色上涨」 */
+  const hasHoldings = stats.holdings > 0
+
+  /**
+   * 首页中间区块。显示哪些、按什么顺序由设置 →「首页显示」决定；
+   * 顶部净资产、资产分类固定在前面，数据管理固定在最后，不在这个集合里。
+   */
+  const homeBlocks: Record<HomeBlockId, ReactNode> = {
+    holdingsProfit: (
+      <div className="mt-4 rounded-card border border-line bg-s2 px-4 py-3.5">
+        <div className="flex items-center justify-between">
+          <span className="text-[12px] text-ink4">持仓总盈亏</span>
+          <span
+            className={`inline-flex items-center gap-1 text-[15px] font-semibold tabular-nums ${
+              hasHoldings ? (stats.profit >= 0 ? 'text-up' : 'text-down') : 'text-ink2'
+            }`}
+          >
+            {hasHoldings ? (
+              stats.profit >= 0 ? (
+                <TrendingUp size={14} />
+              ) : (
+                <TrendingDown size={14} />
+              )
+            ) : (
+              <Minus size={14} />
+            )}
+            {hidden ? '••••' : `${formatSigned(stats.profit)} 元`}
+          </span>
+        </div>
+        <div className="mt-1.5 flex items-center justify-between text-[11px]">
+          <span className="text-ink4">成本合计 {hidden ? '••••' : `${formatCNY(stats.cost)} 元`}</span>
+          <span className={hasHoldings ? (stats.profit >= 0 ? 'text-up/80' : 'text-down/80') : 'text-ink4'}>
+            {formatRate(stats.rate)}
+          </span>
+        </div>
+        <div className="mt-2 flex items-center justify-between border-t border-line pt-2 text-[11px] text-ink4">
+          <span>{stats.holdings} 只持仓 · 数据来自天天基金 / 腾讯公开接口</span>
+          <button
+            type="button"
+            onClick={() => void handleRefresh()}
+            disabled={sync.loading}
+            className="text-ink3 underline-offset-2 hover:underline disabled:opacity-50"
+          >
+            {sync.loading ? '同步中…' : '立即刷新'}
+          </button>
+        </div>
+        {sync.lastSuccessAt ? (
+          <p className="mt-1 text-[11px] text-ink4">上次更新：{formatRelative(sync.lastSuccessAt)}</p>
+        ) : null}
+      </div>
+    ),
+    strategy: (
+      <div className="mt-4">
+        <StrategyCard result={rebalance} hidden={hidden} onOpenSettings={() => setStrategySheetOpen(true)} />
+      </div>
+    ),
+    trends: (
+      <div className="mt-4">
+        <TrendsPanel
+          points={settingsState.snapshot.points}
+          salaryRecords={settingsState.settings.salary.records}
+          metrics={settingsState.settings.trends.metrics}
+          defaultRange={settingsState.settings.trends.range}
+          showLabels={settingsState.settings.trends.showLabels}
+          showMom={settingsState.settings.trends.showMom}
+          colorByTrend={settingsState.settings.trends.colorByTrend}
+        />
+      </div>
+    ),
+  }
+
+  /**
+   * 策略表单的数据与回调。
+   * 首页策略卡片的齿轮弹层、设置里的「投资策略」页共用同一份，
+   * 避免两处行为漂移（改一处、漏一处）。
+   */
+  const strategyFormProps = {
+    settings: strategySettings,
+    strategy,
+    mapping,
+    categories: portfolio.categories,
+    categoryValues,
+    onSelectStrategy: (id: string) => {
+      strategyState.setActiveStrategy(id)
+      notify('已切换策略', 'success')
+    },
+    onThresholdChange: strategyState.setThreshold,
+    onIncludeLiabilitiesChange: (v: boolean) => strategyState.setFlag('includeLiabilities', v),
+    onSetMapping: strategyState.setCategoryMapping,
+    onResetMapping: () => {
+      strategyState.resetMapping()
+      notify('已恢复默认映射', 'success')
+    },
+    onAddCustomStrategy: () => strategyState.addCustomStrategy(),
+    onUpdateCustomStrategy: strategyState.updateCustomStrategy,
+    onRemoveCustomStrategy: (id: string) => {
+      strategyState.removeCustomStrategy(id)
+      notify('已删除自定义策略', 'success')
+    },
+  }
 
   return (
     <div className="min-h-screen bg-app">
@@ -335,60 +438,13 @@ export default function App() {
           ) : null}
         </div>
 
-        {/* 策略配置与再平衡建议 */}
-        <div className="mt-4">
-          <StrategyCard result={rebalance} hidden={hidden} onOpenSettings={() => setStrategySheetOpen(true)} />
-        </div>
-
-        {/* 走势面板（净资产 / 总资产 / 负债 / 薪资），在设置里开启后才显示 */}
-        {settingsState.settings.trends.enabled ? (
-          <div className="mt-4">
-            <TrendsPanel
-              points={settingsState.snapshot.points}
-              salaryRecords={settingsState.settings.salary.records}
-              metrics={settingsState.settings.trends.metrics}
-              defaultRange={settingsState.settings.trends.range}
-              showLabels={settingsState.settings.trends.showLabels}
-              showMom={settingsState.settings.trends.showMom}
-              colorByTrend={settingsState.settings.trends.colorByTrend}
-            />
-          </div>
-        ) : null}
-
-        {/* 基金持仓汇总 */}
-        {stats.cost > 0 ? (
-          <div className="mt-4 rounded-card border border-line bg-s2 px-4 py-3.5">
-            <div className="flex items-center justify-between">
-              <span className="text-[12px] text-ink4">基金持仓总盈亏</span>
-              <span
-                className={`inline-flex items-center gap-1 text-[15px] font-semibold tabular-nums ${
-                  stats.profit >= 0 ? 'text-up' : 'text-down'
-                }`}
-              >
-                {stats.profit >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
-                {hidden ? '••••' : `${formatSigned(stats.profit)} 元`}
-              </span>
-            </div>
-            <div className="mt-1.5 flex items-center justify-between text-[11px]">
-              <span className="text-ink4">成本合计 {hidden ? '••••' : `${formatCNY(stats.cost)} 元`}</span>
-              <span className={stats.profit >= 0 ? 'text-up/80' : 'text-down/80'}>{formatRate(stats.rate)}</span>
-            </div>
-            <div className="mt-2 flex items-center justify-between border-t border-line pt-2 text-[11px] text-ink4">
-              <span>{fundCodes.length} 只基金 · 数据来自天天基金公开接口</span>
-              <button
-                type="button"
-                onClick={() => void handleRefresh()}
-                disabled={sync.loading}
-                className="text-ink3 underline-offset-2 hover:underline disabled:opacity-50"
-              >
-                {sync.loading ? '同步中…' : '立即刷新'}
-              </button>
-            </div>
-            {sync.lastSuccessAt ? (
-              <p className="mt-1 text-[11px] text-ink4">上次更新：{formatRelative(sync.lastSuccessAt)}</p>
-            ) : null}
-          </div>
-        ) : null}
+        {/*
+          中间区块：显示哪些、按什么顺序，由设置 →「首页显示」决定。
+          key 用区块 id，拖拽改顺序时 React 会复用同一节点，动画才不会跳。
+        */}
+        {settingsState.settings.home.order.map((id) =>
+          settingsState.settings.home.visible[id] ? <Fragment key={id}>{homeBlocks[id]}</Fragment> : null,
+        )}
 
         {/* 数据管理 */}
         <div className="mt-6">
@@ -476,6 +532,10 @@ export default function App() {
         onSetFundDefault={settingsState.setFundDefault}
         onSetFundingSource={settingsState.setFundingSource}
         onSetTrends={settingsState.setTrends}
+        onSetHomeVisible={settingsState.setHomeVisible}
+        onSetHomeOrder={settingsState.setHomeOrder}
+        onNudgeHomeBlock={settingsState.nudgeHomeBlock}
+        strategyPanel={strategyFormProps}
         onSetFixed={settingsState.setFixed}
         onUpsertSalary={(month, amount) => {
           settingsState.upsertSalary(month, amount)
@@ -492,33 +552,12 @@ export default function App() {
         }}
       />
 
-      {/* 策略设置 */}
+      {/* 策略配置弹层（首页策略卡片的齿轮）：与设置里的「投资策略」页共用同一份表单 */}
       <StrategySettingsSheet
         open={strategySheetOpen}
-        settings={strategySettings}
-        strategy={strategy}
-        mapping={mapping}
-        defaultMapping={defaultMapping}
-        categories={portfolio.categories}
-        categoryValues={categoryValues}
         onClose={() => setStrategySheetOpen(false)}
-        onSelectStrategy={(id) => {
-          strategyState.setActiveStrategy(id)
-          notify('已切换策略', 'success')
-        }}
-        onThresholdChange={strategyState.setThreshold}
-        onIncludeLiabilitiesChange={(v) => strategyState.setFlag('includeLiabilities', v)}
-        onSetMapping={strategyState.setCategoryMapping}
-        onResetMapping={() => {
-          strategyState.resetMapping()
-          notify('已恢复默认映射', 'success')
-        }}
-        onAddCustomStrategy={() => strategyState.addCustomStrategy()}
-        onUpdateCustomStrategy={strategyState.updateCustomStrategy}
-        onRemoveCustomStrategy={(id) => {
-          strategyState.removeCustomStrategy(id)
-          notify('已删除自定义策略', 'success')
-        }}
+        defaultMapping={defaultMapping}
+        {...strategyFormProps}
       />
 
       {/* 清空确认 */}

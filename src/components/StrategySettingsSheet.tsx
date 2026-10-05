@@ -29,35 +29,31 @@ interface StrategySettingsSheetProps {
   onRemoveCustomStrategy: (id: string) => void
 }
 
+/**
+ * 面板主体的入参。
+ * 抽出来是为了让同一份表单既能当独立弹层（首页策略卡片的齿轮），
+ * 也能直接嵌进设置页（设置 →「投资策略」：只有一层，关掉回设置）。
+ */
+export interface StrategySettingsFormProps {
+  settings: StrategySettings
+  strategy: Strategy
+  mapping: Record<string, MappingEntry[]>
+  categories: Category[]
+  categoryValues: Record<string, number>
+  onSelectStrategy: (id: string) => void
+  onThresholdChange: (v: number) => void
+  onIncludeLiabilitiesChange: (v: boolean) => void
+  onSetMapping: (categoryId: string, entries: MappingEntry[]) => void
+  onResetMapping: () => void
+  onAddCustomStrategy: () => Strategy
+  onUpdateCustomStrategy: (id: string, patch: Partial<Omit<Strategy, 'id' | 'kind'>>) => void
+  onRemoveCustomStrategy: (id: string) => void
+}
+
 type Tab = 'strategy' | 'mapping'
 
 export default function StrategySettingsSheet(props: StrategySettingsSheetProps) {
-  const {
-    open,
-    settings,
-    strategy,
-    mapping,
-    categories,
-    categoryValues,
-    onClose,
-    onSelectStrategy,
-    onResetMapping,
-    onSetMapping,
-    onAddCustomStrategy,
-    onUpdateCustomStrategy,
-    onRemoveCustomStrategy,
-  } = props
-
-  const [tab, setTab] = useState<Tab>('strategy')
-
-  useEffect(() => {
-    if (open) setTab('strategy')
-  }, [open])
-
-  const allStrategies = useMemo(
-    () => [...BUILTIN_STRATEGIES, ...settings.customStrategies],
-    [settings.customStrategies],
-  )
+  const { open, onClose, strategy } = props
 
   return (
     <Sheet
@@ -71,6 +67,36 @@ export default function StrategySettingsSheet(props: StrategySettingsSheetProps)
         </span>
       }
     >
+      <StrategySettingsForm {...props} />
+    </Sheet>
+  )
+}
+
+/** 表单主体：独立弹层与设置页共用同一份实现 */
+export function StrategySettingsForm({
+  settings,
+  strategy,
+  mapping,
+  categories,
+  categoryValues,
+  onSelectStrategy,
+  onThresholdChange,
+  onIncludeLiabilitiesChange,
+  onSetMapping,
+  onResetMapping,
+  onAddCustomStrategy,
+  onUpdateCustomStrategy,
+  onRemoveCustomStrategy,
+}: StrategySettingsFormProps) {
+  const [tab, setTab] = useState<Tab>('strategy')
+
+  const allStrategies = useMemo(
+    () => [...BUILTIN_STRATEGIES, ...settings.customStrategies],
+    [settings.customStrategies],
+  )
+
+  return (
+    <>
       {/* 分段控件 */}
       <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl border border-line bg-s2 p-1">
         {(
@@ -94,9 +120,12 @@ export default function StrategySettingsSheet(props: StrategySettingsSheetProps)
 
       {tab === 'strategy' ? (
         <StrategyTab
-          {...props}
+          settings={settings}
+          strategy={strategy}
           allStrategies={allStrategies}
           onSelectStrategy={onSelectStrategy}
+          onThresholdChange={onThresholdChange}
+          onIncludeLiabilitiesChange={onIncludeLiabilitiesChange}
           onAddCustomStrategy={() => {
             const created = onAddCustomStrategy()
             setTab('strategy')
@@ -115,8 +144,7 @@ export default function StrategySettingsSheet(props: StrategySettingsSheetProps)
           onResetMapping={onResetMapping}
         />
       )}
-      {/* 阈值等参数放在两个 tab 之外，随时可调 */}
-    </Sheet>
+    </>
   )
 }
 
@@ -124,12 +152,17 @@ export default function StrategySettingsSheet(props: StrategySettingsSheetProps)
  * Tab 1：策略与参数
  * ------------------------------------------------------------------ */
 
-function StrategyTab(
-  props: StrategySettingsSheetProps & {
-    allStrategies: Strategy[]
-    onAddCustomStrategy: () => Strategy
-  },
-) {
+function StrategyTab(props: {
+  settings: StrategySettings
+  strategy: Strategy
+  allStrategies: Strategy[]
+  onSelectStrategy: (id: string) => void
+  onThresholdChange: (v: number) => void
+  onIncludeLiabilitiesChange: (v: boolean) => void
+  onAddCustomStrategy: () => Strategy
+  onUpdateCustomStrategy: (id: string, patch: Partial<Omit<Strategy, 'id' | 'kind'>>) => void
+  onRemoveCustomStrategy: (id: string) => void
+}) {
   const {
     settings,
     strategy,

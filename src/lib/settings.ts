@@ -69,11 +69,70 @@ export interface TrendsConfig {
   colorByTrend: boolean
 }
 
+/** 首页可配置区块（顶部净资产、资产分类、数据管理固定在首尾，不在此列） */
+export type HomeBlockId = 'holdingsProfit' | 'strategy' | 'trends'
+
+/** 首页「中间区块」的显示开关与顺序 */
+export interface HomeLayoutConfig {
+  /** 显示顺序，只包含中间可配置区块 */
+  order: HomeBlockId[]
+  /** 各区块是否显示 */
+  visible: Record<HomeBlockId, boolean>
+}
+
+/** 当前版本支持的首页区块（以后新增功能只要在这里加一项） */
+export const HOME_BLOCK_IDS: HomeBlockId[] = ['holdingsProfit', 'strategy', 'trends']
+
+/** 首页区块文案，设置页与首页共用一份 */
+export const HOME_BLOCK_LABEL: Record<HomeBlockId, { title: string; desc: string }> = {
+  holdingsProfit: { title: '持仓总盈亏', desc: '场外基金、场内基金与美股/港股的浮动盈亏' },
+  strategy: { title: '投资策略与再平衡', desc: '配置建议、偏离度与调整金额' },
+  trends: { title: '走势面板', desc: '净资产 / 总资产 / 负债 / 薪资的历史曲线' },
+}
+
+/** 默认顺序：持仓总盈亏 → 投资策略 → 走势；以后新增的区块追加在末尾 */
+const DEFAULT_HOME_ORDER: HomeBlockId[] = [...HOME_BLOCK_IDS]
+
+const DEFAULT_HOME_VISIBLE: Record<HomeBlockId, boolean> = {
+  holdingsProfit: true,
+  strategy: false,
+  trends: false,
+}
+
+/** 规范化首页顺序：丢弃未知项与重复项，缺失项按默认顺序补到末尾 */
+export function normalizeHomeOrder(raw: unknown): HomeBlockId[] {
+  const out: HomeBlockId[] = []
+  const seen = new Set<HomeBlockId>()
+  if (Array.isArray(raw)) {
+    for (const v of raw as unknown[]) {
+      if (typeof v !== 'string' || !HOME_BLOCK_IDS.includes(v as HomeBlockId)) continue
+      const id = v as HomeBlockId
+      if (seen.has(id)) continue
+      seen.add(id)
+      out.push(id)
+    }
+  }
+  for (const id of DEFAULT_HOME_ORDER) if (!seen.has(id)) out.push(id)
+  return out
+}
+
+/** 上移 / 下移一位；越界时原样返回 */
+export function moveHomeBlock(order: HomeBlockId[], id: HomeBlockId, dir: -1 | 1): HomeBlockId[] {
+  const idx = order.indexOf(id)
+  const target = idx + dir
+  if (idx < 0 || target < 0 || target >= order.length) return order
+  const next = [...order]
+  ;[next[idx], next[target]] = [next[target], next[idx]]
+  return next
+}
+
 export interface AppSettings {
   version: number
   fund: FundDefaults
   /** 走势面板配置（在设置里选指标，卡片内不再选） */
   trends: TrendsConfig
+  /** 首页显示哪些中间区块、按什么顺序 */
+  home: HomeLayoutConfig
   salary: {
     /** 按月存档的薪资记录 */
     records: SalaryRecord[]
@@ -92,6 +151,7 @@ export function createDefaultSettings(): AppSettings {
       showMom: true,
       colorByTrend: true,
     },
+    home: { order: [...DEFAULT_HOME_ORDER], visible: { ...DEFAULT_HOME_VISIBLE } },
     fund: { useFunding: false },
     salary: {
       records: [],
@@ -172,6 +232,23 @@ function normalizeTrends(raw: Record<string, unknown>, salary: Record<string, un
   }
 }
 
+/** 首页区块配置：老数据没有 home 时，走势的开关沿用原来的 trends.enabled */
+function normalizeHome(raw: Record<string, unknown>, legacyTrendsEnabled: boolean): HomeLayoutConfig {
+  const h = isRecord(raw.home) ? raw.home : null
+  const order = normalizeHomeOrder(h ? h.order : undefined)
+  const visible: Record<HomeBlockId, boolean> = { ...DEFAULT_HOME_VISIBLE }
+  const visibleRaw = h && isRecord(h.visible) ? h.visible : null
+  if (visibleRaw) {
+    for (const id of HOME_BLOCK_IDS) {
+      const v = visibleRaw[id]
+      if (typeof v === 'boolean') visible[id] = v
+    }
+  } else {
+    visible.trends = legacyTrendsEnabled
+  }
+  return { order, visible }
+}
+
 /** 把任意来源的数据规范化为当前 Schema（脏数据不影响使用） */
 export function normalizeSettings(raw: unknown): AppSettings {
   const base = createDefaultSettings()
@@ -204,15 +281,25 @@ export function normalizeSettings(raw: unknown): AppSettings {
 
   const paydayRaw = Number(fixed.payday)
 
+  /**
+   * 走势面板「是否显示」现在统一由 home.visible.trends 决定。
+   * 老数据没有 home 时沿用旧的 trends.enabled；随后把 trends.enabled 同步成 home 的值，
+   * 这样即便回滚到旧版本，用户的开关设置也不会丢。
+   */
+  const trends = normalizeTrends(raw, salary)
+  const home = normalizeHome(raw, trends.enabled)
+  trends.enabled = home.visible.trends
+
   return {
     version: 1,
     fund: {
       useFunding: fund.useFunding === true,
       lastFundingSource: normalizeSource(fund.lastFundingSource),
     },
+    home,
     // 兼容旧数据：v1 用顶层 trendsEnabled / salary.showChart 表示开关，
     // 且当时面板固定展示全部四个指标
-    trends: normalizeTrends(raw, salary),
+    trends,
     salary: {
       records,
       fixed: {
