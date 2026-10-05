@@ -16,11 +16,15 @@ permissions:
 # 同时只保留一个部署任务；排队中的旧任务会被取消，但正在发布的不打断
 concurrency:
   group: pages
-  cancel-in-progress: false
+  # 新推送直接顶掉组内旧的 run：否则一个卡住的旧 run 会占着并发组，
+  # 让后续推送永远停在 pending（2026-10-05 实际踩到过一次）
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    # 卡住的 job 会一直占着并发组，必须给个上限主动失败
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -70,6 +74,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
