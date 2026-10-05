@@ -5,6 +5,14 @@ import { safeNum } from './calc'
 
 // 键名刻意保留早期前缀（项目曾用名 asset-card-wallet）：改名不迁移数据，老用户无感
 export const STORAGE_KEY = 'asset-card-wallet/portfolio/v2'
+/**
+ * 记录「已经向该用户提供过」的内置分类 id。
+ *
+ * 没有这份记忆就无法区分「用户主动删掉了国债」和「老数据里从来没有国债」，
+ * 于是删除的内置分类每次启动都会被补回来并弹一次升级提示。
+ * 这是新增键（不改名、不动主数据结构），前缀仍在 1.0 自己的 asset-card-wallet/ 命名空间内。
+ */
+export const CATEGORY_INTRO_KEY = 'asset-card-wallet/category-intro/v1'
 /** 兜底：旧版本键名，迁移后保留只读读取 */
 const LEGACY_KEYS = ['asset-card-wallet/portfolio/v1', 'assetCardWallet', 'asset-card-wallet']
 
@@ -83,9 +91,17 @@ export function normalizePortfolio(raw: unknown): Portfolio | null {
         .slice(-120)
     : []
 
+  /**
+   * 分类为空数组是「用户把分类全删了」的显式状态，必须原样保留
+   * （UI 有对应的空状态，见 App.tsx）。只有「有内容但没有一条合法」的脏数据
+   * 才回退默认分类，避免脏数据让界面变空。
+   */
+  const normalizedCategories =
+    categories.length > 0 || rawCategories.length === 0 ? categories : createDefaultCategories()
+
   return {
     version: SCHEMA_VERSION,
-    categories: categories.length > 0 ? categories : createDefaultCategories(),
+    categories: normalizedCategories,
     history,
     lastSyncedAt: typeof obj.lastSyncedAt === 'number' ? obj.lastSyncedAt : undefined,
   }
@@ -186,6 +202,53 @@ function normalizeQuote(raw: unknown) {
   }
 }
 
+/* ------------------------------------------------------------------ *
+ * 内置分类的「已提供」标记（区分「用户删了」与「老数据没有」）
+ * ------------------------------------------------------------------ */
+
+function readIntroducedCategories(): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(CATEGORY_INTRO_KEY)
+    if (!raw) return new Set()
+    const parsed: unknown = JSON.parse(raw)
+    return new Set(Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : [])
+  } catch {
+    // 标记损坏时退化为旧行为（缺失即补），不影响用户数据
+    return new Set()
+  }
+}
+
+/** 把本版本的内置分类全部记为「已提供」；写失败（如空间已满）只是退化为旧行为 */
+function markBuiltInCategoriesIntroduced(): void {
+  try {
+    const next = new Set([...readIntroducedCategories(), ...createDefaultCategories().map((c) => c.id)])
+    const serialized = JSON.stringify([...next])
+    if (window.localStorage.getItem(CATEGORY_INTRO_KEY) !== serialized) {
+      window.localStorage.setItem(CATEGORY_INTRO_KEY, serialized)
+    }
+  } catch {
+    /* 忽略 */
+  }
+}
+
+/**
+ * 补内置分类 + 落标记。
+ * 空数组代表用户把分类全删了（UI 有空状态），是合法状态，不能当作老数据补默认分类。
+ */
+function withMergedBuiltInCategories(portfolio: Portfolio, recovered: boolean): StorageResult {
+  const merged =
+    portfolio.categories.length === 0
+      ? { categories: portfolio.categories, added: [] as string[] }
+      : mergeDefaultCategories(portfolio.categories, readIntroducedCategories())
+  const addedNames = merged.added.map((id) => merged.categories.find((c) => c.id === id)?.name ?? id)
+  markBuiltInCategoriesIntroduced()
+  return {
+    portfolio: { ...portfolio, categories: merged.categories },
+    recovered,
+    addedCategories: addedNames.length > 0 ? addedNames : undefined,
+  }
+}
+
 /** 读取本地数据；损坏时自动回退默认值并标记 recovered */
 export function loadPortfolio(): StorageResult {
   if (!isStorageAvailable()) {
@@ -195,26 +258,19 @@ export function loadPortfolio(): StorageResult {
     const raw = window.localStorage.getItem(STORAGE_KEY)
     if (raw) {
       const parsed = normalizePortfolio(JSON.parse(raw))
-      if (parsed) {
-        // 升级兼容：补上后来新增的内置分类（如「国债」）
-        const merged = mergeDefaultCategories(parsed.categories)
-        const addedNames = merged.added
-          .map((id) => merged.categories.find((c) => c.id === id)?.name ?? id)
-        return {
-          portfolio: { ...parsed, categories: merged.categories },
-          recovered: false,
-          addedCategories: addedNames.length > 0 ? addedNames : undefined,
-        }
-      }
+      if (parsed) return withMergedBuiltInCategories(parsed, false)
+      markBuiltInCategoriesIntroduced()
       return { portfolio: createEmptyPortfolio(), recovered: true, error: '本地数据格式异常，已重置为默认分类' }
     }
-    // 迁移旧键
+    // 迁移旧键（同样要走内置分类补齐，否则从旧键迁移过来的人第一次打开拿不到「国债」）
     for (const key of LEGACY_KEYS) {
       const legacy = window.localStorage.getItem(key)
       if (!legacy) continue
       const parsed = normalizePortfolio(JSON.parse(legacy))
-      if (parsed) return { portfolio: parsed, recovered: false }
+      if (parsed) return withMergedBuiltInCategories(parsed, false)
     }
+    // 首次使用：先把本版本的内置分类记为「已提供」，用户随后删除才能真正生效
+    markBuiltInCategoriesIntroduced()
     return { portfolio: createEmptyPortfolio(), recovered: false }
   } catch (e) {
     return {
@@ -246,6 +302,8 @@ export function exportPortfolio(portfolio: Portfolio): string {
 export function clearPortfolio(): void {
   try {
     window.localStorage.removeItem(STORAGE_KEY)
+    // 标记必须跟主数据一起清掉，否则残留的「已提供」记录会和新数据不一致
+    window.localStorage.removeItem(CATEGORY_INTRO_KEY)
   } catch {
     /* 忽略 */
   }

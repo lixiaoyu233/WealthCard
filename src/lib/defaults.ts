@@ -79,11 +79,19 @@ export function createDefaultCategories(): Category[] {
  * 场景：老用户的 localStorage 里没有后来新增的默认分类（例如「国债」）。
  * 这里把缺失的内置分类插到默认顺序对应的位置，**不动任何已有分类**，
  * 也不覆盖用户改过的名称 / 图标 / 颜色，避免升级把用户数据搞乱。
+ *
+ * alreadyIntroduced：这些内置分类此前已经向该用户提供过（见 storage.ts 的
+ * category-intro 标记）。「用户主动删掉」与「老数据里从来没有」在数据上完全一样，
+ * 只看 id 是否存在无法区分，否则删除的内置分类每次启动都会被当成待迁移数据补回来。
+ * 不传该参数时保持旧语义（凡是缺失就补），已有调用方与测试不受影响。
  */
-export function mergeDefaultCategories(categories: Category[]): { categories: Category[]; added: string[] } {
+export function mergeDefaultCategories(
+  categories: Category[],
+  alreadyIntroduced: ReadonlySet<string> = new Set(),
+): { categories: Category[]; added: string[] } {
   const existingIds = new Set(categories.map((c) => c.id))
   const defaults = createDefaultCategories()
-  const missing = defaults.filter((d) => !existingIds.has(d.id))
+  const missing = defaults.filter((d) => !existingIds.has(d.id) && !alreadyIntroduced.has(d.id))
   if (missing.length === 0) return { categories, added: [] }
 
   const order = defaults.map((d) => d.id)
