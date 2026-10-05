@@ -29,10 +29,5 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts'],
-    /*
-     * Dexie 需要 IndexedDB 与 DOM 全局；node 环境下由 setup 文件注入
-     * fake-indexeddb（仅测试用，不影响生产包）。
-     */
-    setupFiles: ['./src/test/setup.ts'],
   },
 })

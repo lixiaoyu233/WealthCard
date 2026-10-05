@@ -18,7 +18,6 @@ import {
   hasUsableRates,
   isFxStale,
 } from './currency'
-import { shouldSkipCacheWrite } from './readOnly'
 
 const PRIMARY = 'https://open.er-api.com/v6/latest/CNY'
 const BACKUP = 'https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/cny.json'
@@ -48,12 +47,6 @@ export function loadCachedRates(): FxRates | null {
 }
 
 export function saveCachedRates(rates: FxRates): void {
-  /*
-   * 汇率缓存不是资产事实（丢了可以重新拉），因此只读模式**静默跳过**而不是抛错。
-   * 注意：跳过的只是 legacy localStorage 缓存；
-   * 2.0 的 FxRate 表与估值逻辑完全不受影响。
-   */
-  if (shouldSkipCacheWrite()) return
   try {
     window.localStorage.setItem(CURRENCY_STORAGE_KEY, JSON.stringify(rates))
   } catch {

@@ -6,8 +6,6 @@ import { isFund, valuate } from './lib/calc'
 import { exportPortfolio } from './lib/storage'
 import { formatCNY, formatRate, formatRelative, formatSigned } from './lib/format'
 import Header from './components/Header'
-import ReadOnlyBanner from './components/ReadOnlyBanner'
-import { isReadOnlyMode, readOnlyMessage } from './lib/readOnly'
 import CategoryCard from './components/CategoryCard'
 import DetailSheet from './components/DetailSheet'
 import CategoryForm from './components/CategoryForm'
@@ -199,18 +197,6 @@ export default function App() {
   }
 
   const handleImport = (file: File) => {
-    /*
-     * ⚠️ 只读模式下**必须先拒绝**，不能显示成功（Phase 8 / W7 修复）。
-     *
-     * 原实现的问题：`importPortfolio` 内部遇到只读会直接 `return`（静默不写），
-     * 但这里仍然无条件 `notify('已导入 N 个分类', 'success')` —— 数据没变却报成功。
-     * 这违反 `lib/readOnly.ts` 明确写下的「禁止假成功」原则。
-     * 而 2.0 设备上只读是**默认状态**，所以这是默认路径上的真实缺陷。
-     */
-    if (isReadOnlyMode()) {
-      notify('只读模式下无法导入：请先完成迁移，或使用新版的「备份与恢复」功能', 'error')
-      return
-    }
     const reader = new FileReader()
     reader.onload = () => {
       try {
@@ -260,9 +246,6 @@ export default function App() {
             <span>{storageError}</span>
           </div>
         ) : null}
-
-        {/* Phase 8 / W1：只读模式常驻提示（不可关闭） */}
-        {isReadOnlyMode() ? <ReadOnlyBanner message={readOnlyMessage() || undefined} /> : null}
 
         {recovered ? (
           <div className="mt-4 flex items-start gap-2 rounded-2xl border border-line bg-s2 px-3.5 py-2.5 text-[12px] text-ink2">

@@ -1,5 +1,4 @@
 import type { HistoryPoint, Portfolio } from '../types/asset'
-import { guardBusinessWrite } from './readOnly'
 import { SCHEMA_VERSION, createDefaultCategories, createEmptyPortfolio, mergeDefaultCategories } from './defaults'
 import { isCurrencyCode } from './currency'
 import { safeNum } from './calc'
@@ -228,11 +227,6 @@ export function loadPortfolio(): StorageResult {
 
 /** 写入本地数据，返回 null 表示成功，否则返回错误文案 */
 export function savePortfolio(portfolio: Portfolio): string | null {
-  /*
-   * 只读模式（Phase 8 / W1）：业务事实已归 IndexedDB，这里**必须拒绝**。
-   * 抛错而不是静默返回 —— 静默会让旧 UI 显示「保存成功」，形成数据幻觉。
-   */
-  guardBusinessWrite('savePortfolio')
   if (!isStorageAvailable()) return '当前浏览器禁用了本地存储，数据无法保存'
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(portfolio))
@@ -250,8 +244,6 @@ export function exportPortfolio(portfolio: Portfolio): string {
 }
 
 export function clearPortfolio(): void {
-  // 清空同样是破坏性业务操作，只读模式下必须拒绝
-  guardBusinessWrite('clearPortfolio')
   try {
     window.localStorage.removeItem(STORAGE_KEY)
   } catch {
