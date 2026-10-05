@@ -128,7 +128,12 @@ export default function BackupSheet({ open, onClose, repo, onChanged }: BackupSh
     const ok = await rollbackFromStaging(repo)
     setBusy(false)
     if (!ok) {
-      setError('回滚失败（暂存备份缺失或无法写入）；当前数据未被修改')
+      /*
+       * W10-Patch / P0-2：回滚现在**按 `restoreBackup` 的真实返回值**判定。
+       * 失败时暂存备份**不会被删除**，因此用户可以稍后重试
+       * （例如暂时性的存储配额/多标签页事务冲突）。
+       */
+      setError('回滚失败：写入未成功（暂存备份已保留，可稍后重试）；当前数据未被修改')
       return
     }
     setStaging(readStagingBackup())

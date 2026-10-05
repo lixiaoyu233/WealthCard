@@ -705,14 +705,42 @@ export function clearStagingBackup(): void {
   }
 }
 
-/** 用暂存备份把数据回滚到导入前 */
+/**
+ * 用暂存备份把数据回滚到导入前。
+ *
+ * ## 修复的三个缺陷（Phase 8 / W10-Patch，P0-2）
+ *
+ * 原实现是：
+ * ```ts
+ * await restoreBackup(repo, parsed.payload)   // ← 返回值被丢弃
+ * clearStagingBackup()                        // ← 无条件清除
+ * return true                                 // ← 无条件成功
+ * ```
+ * 由于 `restoreBackup()` 把写入失败表达为 **`{ok:false}` 返回值**（不是抛异常），
+ * 上述写法在写入失败时会：
+ * 1. **谎报成功**（`return true`），UI 显示「已回滚到导入前的数据」；
+ * 2. **删除唯一的回滚副本**（`clearStagingBackup()`），用户彻底无法恢复；
+ * 3. 且回滚内部的 `saveStagingBackup()` 早已用**当前坏数据**覆盖了那份正确副本。
+ *
+ * 现在：
+ * - 传 `preserveExistingStaging: true` → **不重写暂存**；
+ * - **只有 `result.ok === true` 才清除暂存**；
+ * - 失败时保留暂存并返回 false，**可以反复重试**。
+ */
 export async function rollbackFromStaging(repo: PortfolioRepository): Promise<boolean> {
   try {
     const raw = tryStorage()?.getItem(BACKUP_SNAPSHOT_KEY)
     if (!raw) return false
     const parsed = JSON.parse(raw) as StagingBackup
     if (!parsed?.payload?.portfolio) return false
-    await restoreBackup(repo, parsed.payload)
+
+    const result = await restoreBackup(repo, parsed.payload, {
+      // 关键：回滚绝不能用「当前（坏）数据」重写这份唯一正确的副本
+      preserveExistingStaging: true,
+    })
+
+    // 只有真的写进去了才允许销毁回滚点
+    if (!result.ok) return false
     clearStagingBackup()
     return true
   } catch {
@@ -754,20 +782,52 @@ export interface RestoreFailure {
  *
  * 调用方必须先跑过 `validateBackupText` 的 dry-run。
  */
+export interface RestoreOptions {
+  /**
+   * 保留**既有**暂存备份，不重新创建。
+   *
+   * ## 为什么必须存在这个选项（Phase 8 / W10-Patch，P0-2）
+   *
+   * `saveStagingBackup()` 每调用一次，就用**当前库里的数据**覆盖同名暂存键。
+   * 而回滚时库里的数据正是**坏数据** —— 于是「准备回滚」这个动作本身
+   * 会把唯一一份正确的回滚副本覆盖掉。随后无论回滚成败，
+   * 用户都永久失去了回到导入前状态的能力。
+   *
+   * 因此回滚路径必须传 `true`：**读取并使用既有暂存，绝不重写它**。
+   */
+  preserveExistingStaging?: boolean
+}
+
 export async function restoreBackup(
   repo: PortfolioRepository,
   payload: BackupPayload,
+  options: RestoreOptions = {},
 ): Promise<RestoreResult | RestoreFailure> {
   /* ---- ① 暂存备份：失败则绝不进入写入 ---- */
   let stagingSavedAt: string
-  try {
-    stagingSavedAt = await saveStagingBackup(repo)
-  } catch (e) {
-    return {
-      ok: false,
-      message: `无法创建导入前的暂存备份，已中止（不会修改任何数据）：${
-        e instanceof Error ? e.message : '未知错误'
-      }`,
+  if (options.preserveExistingStaging) {
+    /*
+     * 回滚路径：**不重写暂存**（那会毁掉唯一副本）。
+     * 但仍要确认它确实存在 —— 没有回滚点就不该继续。
+     */
+    const existing = readStagingBackup()
+    if (!existing) {
+      return {
+        ok: false,
+        message: '找不到导入前的暂存备份，已中止（不会修改任何数据）',
+      }
+    }
+    stagingSavedAt = existing.savedAt
+  } else {
+    try {
+      stagingSavedAt = await saveStagingBackup(repo)
+    } catch (e) {
+      return {
+        ok: false,
+        message: `无法创建导入前的暂存备份，已中止（不会修改任何数据）：${
+          e instanceof Error ? e.message : '未知错误'
+        }`,
+      }
     }
   }
 

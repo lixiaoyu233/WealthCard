@@ -22,6 +22,14 @@ export interface ManualHoldingSheetProps {
   portfolio: Portfolio2
   repo: PortfolioRepository
   onCreated: () => void
+  /**
+   * 预定账户/标的（Phase 8 / W10-Patch，P0-3）。
+   *
+   * 用于「作废后补录」场景：作废让某项持仓失去全部账本依据并被清理后，
+   * 用户可从这里一键带着原账户/标的打开登记表单，无需自己回忆。
+   * 只作为**初始值**，用户仍可修改。
+   */
+  preset?: { accountId?: string; instrumentId?: string }
 }
 
 export default function ManualHoldingSheet({
@@ -30,9 +38,12 @@ export default function ManualHoldingSheet({
   portfolio,
   repo,
   onCreated,
+  preset,
 }: ManualHoldingSheetProps) {
-  const [accountId, setAccountId] = useState(portfolio.accounts[0]?.id ?? '')
-  const [instrumentId, setInstrumentId] = useState('')
+  const [accountId, setAccountId] = useState(
+    preset?.accountId ?? portfolio.accounts[0]?.id ?? '',
+  )
+  const [instrumentId, setInstrumentId] = useState(preset?.instrumentId ?? '')
   const [value, setValue] = useState('')
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)

@@ -73,6 +73,17 @@ export default function TransactionSheet({
   const [toAccountId, setToAccountId] = useState('')
   const [toCashInstrumentId, setToCashInstrumentId] = useState('')
   const [quantity, setQuantity] = useState('')
+  /*
+   * 「整仓划转」显式开关（Phase 8 / W10-Patch，P0-1）。
+   *
+   * 领域层把 `transferQuantity` **未指定**解释为「整仓搬运」。
+   * 原先表单把用户填的「划转数量」写进 `quantity` 而从不写 `transferQuantity`，
+   * 于是「整仓」这个语义被**普通数量输入隐式触发** —— 用户填 20000
+   * 却被整仓搬走。现在：
+   * - 默认（false）：必须填数量 → 映射到 `transferQuantity`（部分划转）；
+   * - 勾选（true）：显式整仓搬运，数量输入被禁用。
+   */
+  const [transferAll, setTransferAll] = useState(false)
   const [price, setPrice] = useState('')
   const [amount, setAmount] = useState('')
   const [toAmount, setToAmount] = useState('')
@@ -142,6 +153,7 @@ export default function TransactionSheet({
     setFee('')
     setNote('')
     setError(null)
+    setTransferAll(false)
   }
 
   const changeType = (next: TransactionType) => {
@@ -177,6 +189,26 @@ export default function TransactionSheet({
       toAccountId: spec.fields.toAccount ? toAccountId || undefined : undefined,
       toCashInstrumentId: spec.fields.toCashInstrument ? toCashInstrumentId || undefined : undefined,
       amount: Number(amount),
+      /*
+       * ## transfer 的数量映射（Phase 8 / W10-Patch，P0-1）
+       *
+       * 领域层用 `transferQuantity` 表达「部分划转」，**未指定**才表示整仓搬运。
+       * 原先把用户填的数量写进 `quantity`，于是：
+       * - 兜底逻辑（`quantity === undefined` 时才把 `amount` 当划转量）不生效；
+       * - `applyTransfer` 读不到 `transferQuantity` → `moveQty = before` → **整仓搬走**。
+       *
+       * 现在显式区分：
+       * - 勾选「整仓划转」→ **不传** `transferQuantity`（唯一的整仓表达方式）；
+       * - 否则把用户填的数量写入 `transferQuantity`（部分划转）。
+       */
+      transferQuantity:
+        type === 'transfer'
+          ? transferAll
+            ? undefined
+            : quantity
+              ? Number(quantity)
+              : undefined
+          : undefined,
       quantity: spec.fields.quantity && quantity ? Number(quantity) : undefined,
       fee: fee ? Number(fee) : undefined,
       currency,
@@ -374,18 +406,43 @@ export default function TransactionSheet({
         {spec.fields.quantity ? (
           <div className="flex gap-2">
             <label className="flex-1 text-[11px] text-ink3">
-              {type === 'transfer' ? '划转数量（现金即金额）' : '数量'}
+              {type === 'transfer'
+                ? transferAll
+                  ? '划转数量（整仓：全部转出）'
+                  : '划转数量'
+                : '数量'}
               <input
                 inputMode="decimal"
                 value={quantity}
+                disabled={type === 'transfer' && transferAll}
                 onChange={(e) => {
                   setQuantity(e.target.value)
                   if (spec.fields.price) syncAmountFromPrice(e.target.value, price)
                   else if (type === 'transfer') setAmount(e.target.value)
                 }}
-                className="mt-1 w-full rounded-lg border border-line bg-s1 px-2 py-2 text-[12px] text-ink"
+                className="mt-1 w-full rounded-lg border border-line bg-s1 px-2 py-2 text-[12px] text-ink disabled:opacity-50"
                 data-testid="tx-quantity"
               />
+              {type === 'transfer' ? (
+                <label className="mt-1.5 flex items-start gap-1.5 text-[11px] text-ink3">
+                  <input
+                    type="checkbox"
+                    checked={transferAll}
+                    onChange={(e) => {
+                      setTransferAll(e.target.checked)
+                      if (e.target.checked) setQuantity('')
+                    }}
+                    className="mt-0.5"
+                    data-testid="tx-transfer-all"
+                  />
+                  <span>
+                    整仓划转（把该标的在源账户的全部数量转出）
+                    <span className="block text-[10px] text-ink4">
+                      不勾选时必须填写划转数量；勾选后按全部数量转出。
+                    </span>
+                  </span>
+                </label>
+              ) : null}
             </label>
             {spec.fields.price ? (
               <label className="flex-1 text-[11px] text-ink3">

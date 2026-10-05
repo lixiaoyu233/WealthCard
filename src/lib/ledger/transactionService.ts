@@ -492,6 +492,111 @@ export interface VoidSuccess {
 
 export type VoidResult = VoidSuccess | RecordFailure
 
+/* ------------------------------------------------------------------ *
+ * 作废前预检（Phase 8 / W10-Patch，P0-3）
+ * ------------------------------------------------------------------ */
+
+export interface VoidImpact {
+  /** 作废后**会失去全部账本依据而被清理**的持仓键（`accountId::instrumentId`） */
+  willDropHoldingKeys: string[]
+  /**
+   * 是否会因此**静默删除真实持仓**。
+   *
+   * 为 true 时 UI **必须**在确认前明确告知用户，
+   * 不能只显示普通的「已作废」。
+   */
+  dropsRealPositions: boolean
+  /** 面向用户的说明（可直接展示） */
+  warning?: string
+}
+
+/**
+ * 预检「作废这笔交易会造成什么后果」——**只读，不写任何数据**。
+ *
+ * ## 为什么需要它（P0-3）
+ *
+ * `voidTransaction` 会清理「在作废后已无任何有效交易支撑」的持仓缓存
+ * （`droppedOrphans`）。对由**期初 `adjustment`** 支撑的持仓（1.0 迁移期初、
+ * 现金转换期初），这意味着**整条真实资产被静默删除**：
+ * 作废成功、UI 显示「已作废」、资产从净资产消失，且 `adjustment`
+ * **不在用户可录入的 9 类交易里**，无法重新录回。
+ *
+ * 该预检复用与 `voidTransaction` **完全同一套**判定逻辑
+ * （同一 `deriveLedger` + 同一 `stillBacked` 规则），因此不会出现
+ * 「预检说没事、实际却删了」的口径分裂。
+ *
+ * 注意：预检**不阻断**作废（不改变 W5 的语义），只负责如实告知。
+ */
+export function inspectVoidImpact(
+  portfolio: Portfolio2,
+  transactionId: string,
+): VoidImpact {
+  const target = portfolio.transactions.find((t) => t.id === transactionId)
+  if (!target) return { willDropHoldingKeys: [], dropsRealPositions: false }
+  if (isVoided(target)) return { willDropHoldingKeys: [], dropsRealPositions: false }
+
+  const ledgerOptions = ledgerOptionsFor(portfolio)
+  const withVoid: Portfolio2 = {
+    ...portfolio,
+    transactions: portfolio.transactions.map((t) =>
+      t.id === transactionId
+        ? { ...t, status: 'VOIDED' as const, voidedAt: new Date().toISOString() }
+        : t,
+    ),
+  }
+
+  const preVoidLedger = deriveLedger(portfolio.transactions, ledgerOptions)
+  const effectKeys = new Set<string>()
+  for (const e of preVoidLedger.entries) {
+    if (e.transactionId !== transactionId) continue
+    effectKeys.add(positionKey(e.accountId, e.instrumentId))
+  }
+  if (target.toAccountId) {
+    if (target.instrumentId) effectKeys.add(positionKey(target.toAccountId, target.instrumentId))
+    if (target.toCashInstrumentId) {
+      effectKeys.add(positionKey(target.toAccountId, target.toCashInstrumentId))
+    }
+  }
+  if (target.toCashInstrumentId) {
+    effectKeys.add(positionKey(target.accountId, target.toCashInstrumentId))
+  }
+
+  const activeTx = withVoid.transactions.filter((t) => !isVoided(t))
+  const stillBacked = (key: string) => {
+    const [accountId, instrumentId] = key.split('::')
+    return activeTx.some(
+      (t) =>
+        t.accountId === accountId &&
+        (t.instrumentId === instrumentId ||
+          t.cashInstrumentId === instrumentId ||
+          t.toCashInstrumentId === instrumentId),
+    )
+  }
+
+  const willDropHoldingKeys: string[] = []
+  for (const h of withVoid.holdings) {
+    if (h.valuationMode === 'manual') continue
+    const key = positionKey(h.accountId, h.instrumentId)
+    if (!effectKeys.has(key)) continue
+    if (stillBacked(key)) continue
+    willDropHoldingKeys.push(key)
+  }
+
+  const dropsRealPositions = willDropHoldingKeys.length > 0
+  return {
+    willDropHoldingKeys,
+    dropsRealPositions,
+    warning: dropsRealPositions
+      ? `作废这笔交易后，有 ${willDropHoldingKeys.length} 项持仓将失去全部账本依据，` +
+        '系统会把这些持仓缓存一并清理 —— 资产会从净资产中消失。' +
+        (target.type === 'adjustment'
+          ? '该交易是「期初余额」，而期初余额不在可录入的交易类型中，作废后无法重新录入；' +
+            '如需保留这部分资产，请在作废后用手动持仓重新登记。'
+          : '如需保留这部分资产，请在作废后重新录入对应交易或用手动持仓登记。')
+      : undefined,
+  }
+}
+
 /**
  * **作废一笔交易**（Phase 8 / W5）。
  *

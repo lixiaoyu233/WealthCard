@@ -3,7 +3,7 @@ import type { Account, Instrument, Portfolio2, Transaction } from '../types/port
 import { TRANSACTION_TYPE_LABEL } from '../types/portfolio2'
 import { hasExternalFlow } from '../lib/ledger/externalFlow'
 import { isVoided, TRANSACTION_STATUS_LABEL } from '../lib/ledger/lifecycle'
-import { voidTransaction } from '../lib/ledger/transactionService'
+import { inspectVoidImpact, voidTransaction } from '../lib/ledger/transactionService'
 import type { PortfolioRepository } from '../lib/db/repository'
 import Sheet from './Sheet'
 
@@ -39,9 +39,20 @@ export interface TransactionDetailSheetProps {
     incomeDelta?: number
     feeDelta?: number
   }>
-  /** 作废成功后回调（带交易 id）；父组件据此刷新派生结果 */
-  onVoided: (transactionId: string) => void
+  /**
+   * 作废成功后回调。
+   *
+   * `droppedOrphans` 是**因失去全部账本依据而被清理的持仓键**（P0-3）。
+   * 父组件据此引导用户补录，避免「资产静默消失且无补救」。
+   */
+  onVoided: (transactionId: string, droppedOrphans: string[]) => void
   onClose: () => void
+  /**
+   * 补救入口：打开「手动持仓」登记表单（P0-3）。
+   *
+   * 由父组件提供，避免本组件直接依赖创建流程。
+   */
+  onRecoverManual?: (preset: { accountId: string; instrumentId: string }) => void
 }
 
 const n = (v: number) => v.toLocaleString('zh-CN', { maximumFractionDigits: 8 })
@@ -49,12 +60,14 @@ const signed = (v: number) => (v > 0 ? `+${n(v)}` : n(v))
 
 export default function TransactionDetailSheet({
   transaction,
+  portfolio,
   repo,
   accountById,
   instrumentById,
   effects,
   onVoided,
   onClose,
+  onRecoverManual,
 }: TransactionDetailSheetProps) {
   /*
    * 用本地 state 承载当前交易：作废后需要立刻反映状态，
@@ -69,6 +82,19 @@ export default function TransactionDetailSheet({
   const voided = isVoided(tx)
   const external = useMemo(() => hasExternalFlow(tx.type), [tx.type])
 
+  /*
+   * 作废**前**预检（P0-3）：只读，复用与 `voidTransaction` 同一套判定。
+   * 若作废会让某些持仓失去全部账本依据，必须在确认前明确告知 ——
+   * 不能让用户以为这是一次普通的「已作废」。
+   */
+  const impact = useMemo(
+    () => (voided ? { willDropHoldingKeys: [], dropsRealPositions: false } : inspectVoidImpact(portfolio, tx.id)),
+    [portfolio, tx.id, voided],
+  )
+
+  /** 本次作废实际清理掉的持仓键（作废成功后填充，用于给出补救入口） */
+  const [droppedOrphans, setDroppedOrphans] = useState<string[]>([])
+
   const doVoid = async () => {
     setBusy(true)
     setError(null)
@@ -81,7 +107,8 @@ export default function TransactionDetailSheet({
       }
       setTx(result.transaction)
       setConfirming(false)
-      onVoided(result.transaction.id)
+      setDroppedOrphans(result.droppedOrphans)
+      onVoided(result.transaction.id, result.droppedOrphans)
     } catch (e) {
       setError(e instanceof Error ? e.message : '作废失败')
     } finally {
@@ -153,14 +180,76 @@ export default function TransactionDetailSheet({
             {tx.voidReason ? `原因：${tx.voidReason}。` : ''}
           </p>
           <p className="mt-0.5 text-ink4">已作废交易不能再作废。</p>
+
+          {/* P0-3：如实告知被清理的持仓，并给出可操作的补救入口 */}
+          {droppedOrphans.length > 0 ? (
+            <div
+              className="mt-2 rounded-lg border border-warn/30 bg-s1 px-2 py-1.5 text-[11px] leading-relaxed"
+              data-testid="tx-void-dropped"
+            >
+              <p className="font-medium tone-warn">
+                以下持仓已失去全部账本依据，已被清理：
+              </p>
+              <ul className="mt-1 space-y-1">
+                {droppedOrphans.map((k) => {
+                  const [acc, inst] = k.split('::')
+                  return (
+                    <li key={k} className="flex items-center justify-between gap-2">
+                      <span className="text-ink3">
+                        {accountById.get(acc)?.name ?? acc} /{' '}
+                        {instrumentById.get(inst)?.name ?? inst}
+                      </span>
+                      {onRecoverManual ? (
+                        <button
+                          type="button"
+                          onClick={() => onRecoverManual({ accountId: acc, instrumentId: inst })}
+                          className="shrink-0 rounded-lg border border-line bg-s2 px-2 py-0.5 text-[11px] text-ink2"
+                          data-testid="tx-void-recover"
+                          data-holding-key={k}
+                        >
+                          补录为手动持仓
+                        </button>
+                      ) : null}
+                    </li>
+                  )
+                })}
+              </ul>
+              <p className="mt-1 text-[10px] text-ink4">
+                手动持仓不受交易驱动，登记后会立即计入资产（不会被作废影响）。
+              </p>
+            </div>
+          ) : null}
         </div>
       ) : confirming ? (
         <div className="mt-3 rounded-xl border border-line bg-s2 px-3 py-2.5" data-testid="tx-void-confirm">
           <p className="text-[11px] leading-relaxed text-ink2">
             确认作废这笔交易？
             <br />
-            作废后它**不再参与资产计算**，但记录会保留（不删除）。 如果只是录错了，请作废后重新录入正确的一笔。
+            作废后它不再参与资产计算，但记录会保留（不删除）。
+            {!impact.dropsRealPositions ? ' 如果只是录错了，请作废后重新录入正确的一笔。' : ''}
           </p>
+
+          {/* P0-3：会让持仓失去全部依据时，必须在确认前明确告知 */}
+          {impact.dropsRealPositions ? (
+            <div
+              className="mt-2 rounded-lg border border-warn/30 bg-s1 px-2 py-1.5 text-[11px] leading-relaxed tone-warn"
+              data-testid="tx-void-impact-warning"
+            >
+              <p className="font-medium">⚠️ 作废后该持仓将失去账本依据</p>
+              <p className="mt-0.5">{impact.warning}</p>
+              <ul className="mt-1 space-y-0.5 text-ink3">
+                {impact.willDropHoldingKeys.map((k) => {
+                  const [acc, inst] = k.split('::')
+                  return (
+                    <li key={k}>
+                      · {accountById.get(acc)?.name ?? acc} /{' '}
+                      {instrumentById.get(inst)?.name ?? inst}
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          ) : null}
           <input
             value={reason}
             onChange={(e) => setReason(e.target.value)}

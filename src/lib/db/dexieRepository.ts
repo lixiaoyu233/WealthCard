@@ -282,11 +282,25 @@ function createSnapshotRepository(db: () => WealthCardDb): SnapshotRepository {
     ...base,
     byDate: (date) => db().snapshots.where('date').equals(date).first(),
     /*
-     * 借 `&date` 唯一索引反向取「小于目标日期」的第一条（= 最近的一份）。
-     * 不读取整表，因此代价与「快照总数」脱钩。
+     * 借 `&date` 索引反向取「小于目标日期」的**第一条**（= 最近的一份）。
+     *
+     * ## 为什么必须用 `.first()` 而不是 `.sortBy()`（Phase 8 / W10-Patch，P1-2）
+     *
+     * W9 曾写 `.below(date).reverse().sortBy('date').then(r => r[0])`，
+     * 并注释「不读取整表，代价与快照总数脱钩」—— **该断言不成立**：
+     * Dexie 的 `Collection.sortBy` 实现是 `this.toArray(...)` 后再
+     * `slice().sort(...)`，即**把整个区间 materialize 到内存并全排序**，
+     * 与旧实现（`getAll()` + filter + sort）同阶。
+     *
+     * `.reverse()` 只改变游标方向、不改变「取多少」；真正让它只读一条的是
+     * **`.first()`** —— 它直接让游标取第一条即停止。
      */
     previousBefore: (date) =>
-      db().snapshots.where('date').below(date).reverse().sortBy('date').then((r) => r[0]),
+      db()
+        .snapshots.where('date')
+        .below(date)
+        .reverse()
+        .first(),
     /**
      * 幂等：同一天只保留一条。
      * 已存在则更新（保留原 id 与 createdAt），否则插入 —— 满足「重复生成不新增」的要求。

@@ -439,7 +439,12 @@ export async function captureSnapshot(
    * W9/P1-1：原实现 `getAll()` + filter + sort 会把**整张快照表**读进内存。
    * 快照表每天 +1 且无裁剪，而这条路径每次开 App、每次写入都要走，
    * 于是「找期初」的代价随使用年限线性上升。
-   * 现在交给 `previousBefore()` 用 `date` 索引直接定位，不再 materialize 全表。
+   *
+   * 现在交给 `previousBefore()` 用 `date` 索引直接定位。
+   *
+   * ⚠️ W10-Patch/P1-2 更正：W9 的实现用了 `.below(date).reverse().sortBy('date')`，
+   * 而 Dexie 的 `sortBy` 会 `toArray()` 后全排序 —— 优化**当时并未生效**
+   * （实测与全表读同阶）。现已改为 `.reverse().first()`，真正只读一条。
    *
    * ⚠️ 语义完全不变：仍是「date 严格小于目标日期的**最新**一份」。
    * 刻意**不做**间隔补齐（那会变成猜测历史）。

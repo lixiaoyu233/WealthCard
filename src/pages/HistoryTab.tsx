@@ -14,6 +14,7 @@ import type { PortfolioRepository } from '../lib/db/repository'
 import { deriveLedger } from '../lib/ledger/derive'
 import FlowsView from '../components/FlowsView'
 import TransactionDetailSheet from '../components/TransactionDetailSheet'
+import ManualHoldingSheet from '../components/ManualHoldingSheet'
 
 /**
  * 历史 Tab（Phase 8 / W4 扩展）
@@ -81,6 +82,17 @@ export default function HistoryTab({ trend, portfolio, repo, onChanged }: Histor
   }, [repo])
 
   const shownTrend = extendedTrend ?? trend
+
+  /**
+   * 「作废后补录」表单的状态（Phase 8 / W10-Patch，P0-3）。
+   *
+   * 作废让某项持仓失去全部账本依据时，`voidTransaction` 会清理该持仓缓存。
+   * 这里提供一条**可操作**的补救路径：带着原账户/标的打开手动持仓登记，
+   * 用户无需自己回忆，也**不需要编辑 JSON**。
+   */
+  const [recoverPreset, setRecoverPreset] = useState<
+    { accountId: string; instrumentId: string } | null
+  >(null)
 
   const [basisDate, setBasisDate] = useState<string | null>(null)
   const [basisSnapshot, setBasisSnapshot] = useState<Snapshot | null>(null)
@@ -478,11 +490,41 @@ export default function HistoryTab({ trend, portfolio, repo, onChanged }: Histor
           instrumentById={instrumentById}
           effects={entriesByTx.get(selected.id) ?? []}
           onVoided={() => {
-            // 作废后关闭详情并触发重新派生（详情内部已用本地 state 反映新状态）
-            setSelected(null)
+            /*
+             * ⚠️ 刻意**不关闭**详情面板（W10-Patch，P0-3）。
+             *
+             * 作废可能清理掉失去全部账本依据的持仓；若立刻关闭面板，
+             * 那条「已清理哪些持仓 + 补录为手动持仓」的补救入口
+             * 会一闪而过、用户根本看不到 —— 补救路径等于不存在。
+             * 详情内部已用本地 state 反映「已作废」，因此保持打开是安全的。
+             */
             onChanged()
           }}
+          onRecoverManual={(preset) => {
+            // 关掉详情，打开手动持仓表单并预填原账户/标的（P0-3 的补救入口）
+            setSelected(null)
+            setRecoverPreset(preset)
+          }}
           onClose={() => setSelected(null)}
+        />
+      ) : null}
+
+      {/*
+        作废后补救入口（P0-3）：`key` 保证每次换预设都重新挂载，
+        否则 useState 的初始值不会随 preset 变化。
+      */}
+      {recoverPreset ? (
+        <ManualHoldingSheet
+          key={`${recoverPreset.accountId}::${recoverPreset.instrumentId}`}
+          open
+          portfolio={portfolio}
+          repo={repo}
+          preset={recoverPreset}
+          onClose={() => setRecoverPreset(null)}
+          onCreated={() => {
+            setRecoverPreset(null)
+            onChanged()
+          }}
         />
       ) : null}
     </div>
