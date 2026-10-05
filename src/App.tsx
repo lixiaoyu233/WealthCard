@@ -20,7 +20,10 @@ import { useStrategy } from './hooks/useStrategy'
 import { useTheme } from './hooks/useTheme'
 import { useSettings } from './hooks/useSettings'
 import { useDividends } from './hooks/useDividends'
-import { formatMonth, type HomeBlockId } from './lib/settings'
+import { useInstallments } from './hooks/useInstallments'
+import { monthlyPressure } from './lib/installments'
+import { formatMonth, listDepositTargets, type HomeBlockId } from './lib/settings'
+import { strategyStatusFor } from './lib/homeLayout'
 import { advanceSnapshot } from './lib/netWorthHistory'
 import { resolveSafeTopInset } from './lib/safeArea'
 import { categoryTotal } from './lib/calc'
@@ -76,6 +79,11 @@ export default function App() {
     taxUs: settingsState.settings.dividends.usTaxRate,
     taxHk: settingsState.settings.dividends.hkTaxRate,
   })
+
+  /** 定期划扣：计划挂在负债条目上，条目余额由计划维护；到期只提示、不自动扣 */
+  const installmentsState = useInstallments(portfolio, (next) => importPortfolio(next))
+  /** 扣款账户候选：现金与固定资产下的金额条目（余额不限，可以扣成负数） */
+  const depositTargets = useMemo(() => listDepositTargets(portfolio), [portfolio])
 
   /**
    * 总资产月度快照：数据一变就更新当月；每月第一次打开时把上月定稿。
@@ -407,7 +415,11 @@ export default function App() {
           themeMode={themeMode}
           onCycleTheme={cycleTheme}
           onOpenSettings={() => setSettingsSheetOpen(true)}
-          strategyStatus={{ text: statusLine(rebalance), level: rebalance.health }}
+          // 首页关了「投资策略」区块，顶部就不再显示「当前策略 · 偏离度」这一行
+          strategyStatus={strategyStatusFor(settingsState.settings.home.visible.strategy, {
+            text: statusLine(rebalance),
+            level: rebalance.health,
+          })}
           fx={{
             hasForeign: exposure.foreignItemCount > 0,
             loading: fx.loading,
@@ -416,6 +428,22 @@ export default function App() {
             currencies: exposure.byCurrency.map((b) => b.currency),
           }}
         />
+
+        {/* 第二个数字：所有分期计划的「每月还款合计」（每季 ÷3、每年 ÷12） */}
+        {installmentsState.monthlyCny > 0 ? (
+          <div
+            className="mt-2.5 flex items-center justify-between rounded-2xl border border-line bg-s2 px-3.5 py-2.5 text-[11.5px]"
+            data-testid="monthly-installment"
+          >
+            <span className="text-ink4">
+              每月还款合计
+              <span className="ml-1.5">
+                （{installmentsState.plans.filter((plan) => plan.remainingTerms > 0).length} 个分期计划）
+              </span>
+            </span>
+            <span className="font-medium tabular-nums text-ink1">{formatCNY(installmentsState.monthlyCny)} 元</span>
+          </div>
+        ) : null}
 
         {/* 汇率缺失时明确提示，避免把原币数字误当成人民币 */}
         {exposure.missingRateCount > 0 ? (
@@ -453,6 +481,12 @@ export default function App() {
               category={category}
               hidden={hidden}
               rates={fx.rates}
+              dueReminders={installmentsState.plans
+                .filter((plan) => plan.categoryId === category.id)
+                .reduce((sum, plan) => sum + installmentsState.dueCount(plan), 0)}
+              planMonthly={installmentsState.plans
+                .filter((plan) => plan.categoryId === category.id)
+                .reduce((sum, plan) => sum + monthlyPressure(plan), 0)}
               onOpen={(c) => setOpenCategoryId(c.id)}
             />
           ))}
@@ -517,6 +551,25 @@ export default function App() {
         syncing={sync.loading}
         rates={fx.rates}
         cashCandidates={settingsState.candidates}
+        plans={installmentsState.plans}
+        depositTargets={depositTargets}
+        onSavePlan={(itemId, plan, enabled) => {
+          if (!enabled || !plan) {
+            const existing = installmentsState.planForItem(itemId)
+            if (existing) installmentsState.deletePlan(existing.id)
+            return
+          }
+          installmentsState.savePlan(plan)
+        }}
+        onConfirmTerm={(plan) => {
+          const out = installmentsState.confirmTerm(plan)
+          notify(out.ok ? (out.message ?? '已扣款') : (out.reason ?? '扣款失败'), out.ok ? 'success' : 'error')
+        }}
+        onSkipReminder={(plan) => {
+          installmentsState.skipReminder(plan)
+          notify('已忽略这次的还款提醒，下次按新的扣款日提示', 'info')
+        }}
+        dueCount={installmentsState.dueCount}
         fundDefault={settingsState.settings.fund}
         onRememberFunding={settingsState.setFundingSource}
         onAddFundedItem={(categoryId, item, source, amount) => {

@@ -12,9 +12,16 @@ import {
 } from '../lib/usStock'
 import type { CashCandidate, FundingSource } from '../lib/settings'
 import { findCandidate } from '../lib/settings'
-import { formatCNY, formatNav, formatRate, formatSigned } from '../lib/format'
+import { formatCNY, formatNav, formatRate, formatSigned, todayKey } from '../lib/format'
 import { makeAmountItem, makeFundItem, makeGoldItem } from '../hooks/usePortfolio'
 import { fetchFundQuotes } from '../lib/fundService'
+import {
+  INTERVAL_LABEL,
+  deriveInstallment,
+  type InstallmentInterval,
+  type InstallmentPlan,
+} from '../lib/installments'
+import { roundMoney } from '../lib/dividends'
 import NumberPad from './NumberPad'
 
 /** 各市场的代码要求文案（校验与提示共用） */
@@ -43,6 +50,12 @@ interface ItemFormProps {
   onSubmit: (item: AssetItem) => void
   onDelete?: () => void
   onCancel: () => void
+  /** 已有的定期划扣计划（编辑负债条目时带出来） */
+  plan?: InstallmentPlan
+  /** 可作为扣款账户的项目（现金与固定资产，余额不限） */
+  depositTargets?: CashCandidate[]
+  /** 保存计划；enabled=false 表示关掉（删除）计划 */
+  onSubmitPlan?: (itemId: string, plan: InstallmentPlan | null, enabled: boolean) => void
 }
 
 type PickerField = 'amount' | 'shares' | 'costNav' | 'grams' | 'pricePerGram' | null
@@ -144,6 +157,9 @@ export default function ItemForm({
   onSubmit,
   onDelete,
   onCancel,
+  plan,
+  depositTargets = [],
+  onSubmitPlan,
 }: ItemFormProps) {
   const editing = Boolean(initial)
   // 编辑时沿用原形态；新增时按分类推断（空分类也能正确给出基金/黄金表单）
@@ -194,6 +210,118 @@ export default function ItemForm({
   const [quoteError, setQuoteError] = useState<string | null>(null)
   /** 市场选择：默认自动识别；A股与场外基金代码同形，必须能手动指定 */
   const [marketPick, setMarketPick] = useState<HoldingMarket | 'auto'>('auto')
+
+  /* ---- 定期划扣（仅负债分类显示） ---- */
+  const [planEnabled, setPlanEnabled] = useState(Boolean(plan))
+  const [planName, setPlanName] = useState(plan?.name ?? '')
+  // 预填「当前剩余」的三个数字（填两样算第三样，四舍五入）
+  const [planTotal, setPlanTotal] = useState(plan ? String(plan.remainingAmount) : '')
+  const [planTerms, setPlanTerms] = useState(plan ? String(plan.remainingTerms) : '')
+  const [planPer, setPlanPer] = useState(plan ? String(plan.perTermAmount) : '')
+  const [planInterval, setPlanInterval] = useState<InstallmentInterval>(plan?.interval ?? 'monthly')
+  const [planDue, setPlanDue] = useState(plan?.nextDueDate ?? todayKey())
+  const [planAccountKey, setPlanAccountKey] = useState(
+    plan ? `${plan.fromAccount.categoryId}:${plan.fromAccount.itemId}` : '',
+  )
+  const [planCountFull, setPlanCountFull] = useState(plan?.countFullAmount ?? false)
+
+  const planDerived = deriveInstallment({
+    totalAmount: Number(planTotal),
+    terms: Number(planTerms),
+    perTermAmount: Number(planPer),
+  })
+  const planAccount = (depositTargets ?? []).find((c) => `${c.categoryId}:${c.itemId}` === planAccountKey)
+
+  /**
+   * 三个数字始终自洽（填两样算第三样，四舍五入）：
+   * - 改总额：优先按期数摊成每期；没期数就按每期反推期数
+   * - 改期数：优先用每期算总额；没每期就按总额摊成每期
+   * - 改每期：优先按期数算总额；没期数就按总额反推期数
+   */
+  const onPlanTotal = (value: string) => {
+    setPlanTotal(value)
+    const total = Number(value)
+    if (!(total > 0)) return
+    const t = Number(planTerms)
+    if (t > 0) {
+      setPlanPer(String(roundMoney(total / t)))
+      return
+    }
+    const per = Number(planPer)
+    if (per > 0) setPlanTerms(String(Math.max(1, Math.round(total / per))))
+  }
+  const onPlanTerms = (value: string) => {
+    setPlanTerms(value)
+    const t = Number(value)
+    if (!(t > 0)) return
+    const per = Number(planPer)
+    if (per > 0) {
+      setPlanTotal(String(roundMoney(t * per)))
+      return
+    }
+    const total = Number(planTotal)
+    if (total > 0) setPlanPer(String(roundMoney(total / t)))
+  }
+  const onPlanPer = (value: string) => {
+    setPlanPer(value)
+    const per = Number(value)
+    if (!(per > 0)) return
+    const t = Number(planTerms)
+    if (t > 0) {
+      setPlanTotal(String(roundMoney(t * per)))
+      return
+    }
+    const total = Number(planTotal)
+    if (total > 0) setPlanTerms(String(Math.max(1, Math.round(total / per))))
+  }
+
+  /** 组装计划；返回 null 表示校验没过 */
+  const buildPlan = (itemId: string): InstallmentPlan | null => {
+    if (!planAccount) {
+      setError('定期划扣：请选择扣款账户')
+      return null
+    }
+    if (!planDerived.ok) {
+      setError('定期划扣：欠款总额 / 期数 / 每期金额 至少填两项')
+      return null
+    }
+    return {
+      id: plan?.id ?? `plan_${itemId}`,
+      categoryId: category.id,
+      itemId,
+      name: planName.trim() || '分期',
+      remainingAmount: planDerived.totalAmount,
+      remainingTerms: planDerived.terms,
+      perTermAmount: planDerived.perTermAmount,
+      interval: planInterval,
+      nextDueDate: planDue,
+      firstDueDate: plan?.firstDueDate ?? planDue,
+      countFullAmount: planCountFull,
+      fromAccount: {
+        categoryId: planAccount.categoryId,
+        itemId: planAccount.itemId,
+        itemName: planAccount.itemName,
+      },
+      paidTerms: plan?.paidTerms ?? 0,
+      paidTotal: plan?.paidTotal ?? 0,
+      lastPaidDate: plan?.lastPaidDate,
+      createdAt: plan?.createdAt ?? Date.now(),
+    }
+  }
+
+  /** 提交：先落计划（有条目 id 才能绑定），再交条目 */
+  const finish = (item: AssetItem) => {
+    if (category.isLiability && onSubmitPlan) {
+      if (!planEnabled) {
+        if (plan) onSubmitPlan(item.id, null, false)
+      } else {
+        const next = buildPlan(item.id)
+        if (!next) return
+        onSubmitPlan(item.id, next, true)
+      }
+    }
+    return onSubmit(item)
+  }
   /** 记录查失败的代码，避免自动重试打爆接口 */
   const failedCodeRef = useRef<string>('')
   const nameTouched = useRef(false)
@@ -385,10 +513,14 @@ export default function ItemForm({
       )
     }
 
-    const a = parseAmount(amount)
+    let a = parseAmount(amount)
+    // 有计划时条目余额由计划维护：没手填金额就先用计划口径的值（保存后会被计划同步覆盖）
+    if ((!Number.isFinite(a) || a === 0) && category.isLiability && planEnabled && planDerived.ok) {
+      a = planCountFull ? planDerived.totalAmount : planDerived.perTermAmount
+    }
     if (!Number.isFinite(a)) return setError('请输入有效金额')
     if (a === 0) return setError('金额不能为 0')
-    return onSubmit(
+    return finish(
       makeAmountItem({
         // 编辑时复用原 id，否则更新会匹配不到目标条目
         id: initial?.id,
@@ -874,6 +1006,146 @@ export default function ItemForm({
               <span className={`font-medium tabular-nums ${preview.profit >= 0 ? 'text-up' : 'text-down'}`}>
                 {formatSigned(preview.profit)} 元（{formatRate(preview.rate)}）
               </span>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* 定期划扣：只在负债分类下出现，默认关闭 */}
+      {category.isLiability ? (
+        <div className="rounded-xl border border-line bg-s2 px-3.5 py-3" data-testid="installment-section">
+          <label className="flex cursor-pointer items-center justify-between">
+            <span className="text-[13px] text-ink2">定期划扣（房贷 / 分期 / 车贷）</span>
+            <input
+              type="checkbox"
+              data-testid="installment-toggle"
+              checked={planEnabled}
+              onChange={(e) => setPlanEnabled(e.target.checked)}
+              className="h-4 w-4 accent-brand"
+            />
+          </label>
+
+          {planEnabled ? (
+            <div className="mt-3 space-y-3">
+              <label className="block">
+                <span className="field-label">名称</span>
+                <input
+                  data-testid="plan-name"
+                  value={planName}
+                  onChange={(e) => setPlanName(e.target.value)}
+                  placeholder="房贷 / 手机分期（24 期）"
+                  className="field-input"
+                />
+              </label>
+
+              <div className="grid grid-cols-3 gap-2">
+                <label className="block">
+                  <span className="field-label">欠款总额</span>
+                  <input
+                    data-testid="plan-total"
+                    value={planTotal}
+                    onChange={(e) => onPlanTotal(e.target.value.replace(/[^\d.]/g, ''))}
+                    inputMode="decimal"
+                    placeholder="120000"
+                    className="field-input tabular-nums"
+                  />
+                </label>
+                <label className="block">
+                  <span className="field-label">期数</span>
+                  <input
+                    data-testid="plan-terms"
+                    value={planTerms}
+                    onChange={(e) => onPlanTerms(e.target.value.replace(/[^\d]/g, ''))}
+                    inputMode="numeric"
+                    placeholder="24"
+                    className="field-input tabular-nums"
+                  />
+                </label>
+                <label className="block">
+                  <span className="field-label">每期金额</span>
+                  <input
+                    data-testid="plan-per"
+                    value={planPer}
+                    onChange={(e) => onPlanPer(e.target.value.replace(/[^\d.]/g, ''))}
+                    inputMode="decimal"
+                    placeholder="5000"
+                    className="field-input tabular-nums"
+                  />
+                </label>
+              </div>
+
+              <p className="text-[11px] leading-relaxed text-ink4">
+                三项填两样就行，第三样自动算（四舍五入）。
+                {planDerived.ok && planDerived.rounded ? ' 除不尽，最后一期会自动兜差。' : ''}
+                {planDerived.ok && !planDerived.rounded
+                  ? ` 共 ${planDerived.terms} 期 × ${formatCNY(planDerived.perTermAmount)} 元 = ${formatCNY(planDerived.totalAmount)} 元`
+                  : ''}
+              </p>
+
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block">
+                  <span className="field-label">周期</span>
+                  <select
+                    data-testid="plan-interval"
+                    value={planInterval}
+                    onChange={(e) => setPlanInterval(e.target.value as InstallmentInterval)}
+                    className="field-input"
+                  >
+                    {(Object.keys(INTERVAL_LABEL) as InstallmentInterval[]).map((key) => (
+                      <option key={key} value={key}>
+                        {INTERVAL_LABEL[key]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="field-label">{plan ? '下次扣款日' : '首次扣款日'}</span>
+                  <input
+                    data-testid="plan-due"
+                    type="date"
+                    value={planDue}
+                    onChange={(e) => setPlanDue(e.target.value)}
+                    className="field-input tabular-nums"
+                  />
+                </label>
+              </div>
+
+              <label className="block">
+                <span className="field-label">扣款账户</span>
+                <select
+                  data-testid="plan-account"
+                  value={planAccountKey}
+                  onChange={(e) => setPlanAccountKey(e.target.value)}
+                  className="field-input"
+                >
+                  <option value="">请选择</option>
+                  {(depositTargets ?? []).map((c) => (
+                    <option key={`${c.categoryId}:${c.itemId}`} value={`${c.categoryId}:${c.itemId}`}>
+                      {c.itemName}
+                    </option>
+                  ))}
+                </select>
+                {(depositTargets ?? []).length === 0 ? (
+                  <span className="mt-1 block text-[11px] tone-warn">
+                    还没有可用的现金账户，先去「现金与固定资产」添加一条
+                  </span>
+                ) : null}
+              </label>
+
+              <label className="flex cursor-pointer items-center justify-between">
+                <span className="text-[12px] text-ink3">把「剩余欠款」全额计入负债</span>
+                <input
+                  type="checkbox"
+                  data-testid="plan-count-full"
+                  checked={planCountFull}
+                  onChange={(e) => setPlanCountFull(e.target.checked)}
+                  className="h-4 w-4 accent-brand"
+                />
+              </label>
+              <p className="text-[11px] leading-relaxed text-ink4">
+                关闭（默认）：负债里只记「每期还款额」；打开：把剩余欠款全额记进负债总额。到期只提示，
+                点「确认扣款」才从账户里扣（余额不足可以扣成负数）。
+              </p>
             </div>
           ) : null}
         </div>

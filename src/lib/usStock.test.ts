@@ -5,6 +5,7 @@ import {
   detectStockMarket,
   isHkTicker,
   isUsTicker,
+  ashareExchange,
   normalizeHkCode,
   parseTencentQuotes,
   toTencentSymbol,
@@ -16,6 +17,32 @@ const US_LINE =
 const HK_LINE =
   'v_hk00700="100~腾讯控股~00700~421.200~431.000~422.000~19108045.0~0~0~421.200~0~0~0~0~0~0~0~0~0~421.200~0~0~0~0~0~0~0~0~0~19108045.0~2026/10/02 16:08:10~-9.800~-2.27~425.000~419.800~421.200~8059664706.422";'
 const NONE = 'v_pv_none_match="1";'
+
+describe('A股/场内基金 交易所前缀', () => {
+  it('沪市：60 主板 / 68 科创板 / 5 基金与 ETF / 9 沪B', () => {
+    for (const c of ['600519', '601318', '603259', '688111', '510300', '510050', '588000', '512880', '900901']) {
+      expect(ashareExchange(c), c).toBe('sh')
+    }
+  })
+
+  it('深市：00 主板 / 30 创业板 / 15x 与 16x 基金 ETF / 2 深B', () => {
+    for (const c of ['000001', '002594', '300750', '159915', '159919', '161725', '200011']) {
+      expect(ashareExchange(c), c).toBe('sz')
+    }
+  })
+
+  it('北交所：4 / 8 开头与 920 新号段', () => {
+    for (const c of ['430047', '830799', '871981', '920002']) {
+      expect(ashareExchange(c), c).toBe('bj')
+    }
+  })
+
+  it('场内 ETF 会拼成 sh510300 / sz159915（以前被错判成 bj，腾讯无返回）', () => {
+    expect(toTencentSymbol('510300', 'ashare')).toBe('sh510300')
+    expect(toTencentSymbol('159915', 'ashare')).toBe('sz159915')
+    expect(buildTencentUrl(['510300', '159915'], 'ashare')).toContain('sh510300,sz159915')
+  })
+})
 
 describe('美股/港股代码识别', () => {
   it('美股代码：字母，允许 . 与 -', () => {

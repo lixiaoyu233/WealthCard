@@ -99,8 +99,13 @@ export function isAshareCode(code: string): boolean {
 /** A股交易所前缀：沪 sh / 深 sz / 北交所 bj */
 export function ashareExchange(code: string): 'sh' | 'sz' | 'bj' {
   const c = code.trim()
-  if (/^[69]/.test(c)) return 'sh'
-  if (/^[023]/.test(c)) return 'sz'
+  // 北交所新号段 920 要先判，否则会被当成 9 开头的沪B
+  if (/^920/.test(c)) return 'bj'
+  // 沪市：6 主板（含 688 科创板）/ 5 基金与 ETF / 9 沪B
+  if (/^[569]/.test(c)) return 'sh'
+  // 深市：0 主板 / 3 创业板 / 1 基金与 ETF（159xxx 等）/ 2 深B
+  if (/^[0123]/.test(c)) return 'sz'
+  // 其余按北交所处理：4 / 8 开头，以及 920 新号段
   return 'bj'
 }
 

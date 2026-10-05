@@ -9,6 +9,7 @@ import { resolveIcon } from '../lib/icons'
 import Sheet from './Sheet'
 import ItemForm from './ItemForm'
 import ConfirmDialog from './ConfirmDialog'
+import { INTERVAL_LABEL, planForItem, type InstallmentPlan } from '../lib/installments'
 
 interface DetailSheetProps {
   category: Category | null
@@ -40,6 +41,18 @@ interface DetailSheetProps {
   onMoveCategory: (id: string, dir: -1 | 1) => void
   onRefresh: () => void
   onEditCategory: (category: Category) => void
+  /** 定期划扣计划（按条目查） */
+  plans?: InstallmentPlan[]
+  /** 扣款账户候选（现金与固定资产，余额不限，可扣成负数） */
+  depositTargets?: CashCandidate[]
+  /** 保存/删除计划：enabled=false 表示关掉计划（条目保留） */
+  onSavePlan?: (itemId: string, plan: InstallmentPlan | null, enabled: boolean) => void
+  /** 确认扣一期 */
+  onConfirmTerm?: (plan: InstallmentPlan) => void
+  /** 忽略过期提醒 */
+  onSkipReminder?: (plan: InstallmentPlan) => void
+  /** 已到期未处理的期数 */
+  dueCount?: (plan: InstallmentPlan) => number
 }
 
 type Mode = { view: 'list' } | { view: 'form'; initial?: AssetItem }
@@ -62,6 +75,12 @@ export default function DetailSheet({
   onRemoveCategory,
   onMoveCategory,
   onRefresh,
+  plans,
+  depositTargets,
+  onSavePlan,
+  onConfirmTerm,
+  onSkipReminder,
+  dueCount,
   onEditCategory,
 }: DetailSheetProps) {
   const [mode, setMode] = useState<Mode>({ view: 'list' })
@@ -77,6 +96,8 @@ export default function DetailSheet({
 
   const Icon = resolveIcon(category.icon)
   const subtotal = categoryTotal(category, rates)
+  /** 条目对应的定期划扣计划 */
+  const planOf = (itemId: string) => (plans ? planForItem(plans, itemId) : undefined)
   const displayTotal = category.isLiability ? -Math.abs(subtotal) : subtotal
   const hasFunds = category.items.some(isFund)
   /** 只按名字判断：空状态时分类里还没有任何条目，无法靠 item.kind 推断 */
@@ -200,6 +221,10 @@ export default function DetailSheet({
                     key={item.id}
                     item={item}
                     rates={rates}
+                    plan={planOf(item.id)}
+                    dueCount={dueCount}
+                    onConfirmTerm={onConfirmTerm}
+                    onSkipReminder={onSkipReminder}
                     onEdit={() => setMode({ view: 'form', initial: item })}
                     onDelete={() => setPendingDelete({ type: 'item', item })}
                   />
@@ -256,6 +281,9 @@ export default function DetailSheet({
             onRememberFunding={onRememberFunding}
             onSubmitFunded={onAddFundedItem ? handleSubmitFunded : undefined}
             initial={mode.initial}
+            plan={mode.initial ? planOf(mode.initial.id) : undefined}
+            depositTargets={depositTargets}
+            onSubmitPlan={onSavePlan}
             onSubmit={handleSubmit}
             onDelete={
               mode.initial
@@ -288,14 +316,23 @@ export default function DetailSheet({
 function ItemRow({
   item,
   rates,
+  plan,
+  dueCount,
+  onConfirmTerm,
+  onSkipReminder,
   onEdit,
   onDelete,
 }: {
   item: AssetItem
   rates?: FxRates | null
+  plan?: InstallmentPlan
+  dueCount?: (plan: InstallmentPlan) => number
+  onConfirmTerm?: (plan: InstallmentPlan) => void
+  onSkipReminder?: (plan: InstallmentPlan) => void
   onEdit: () => void
   onDelete: () => void
 }) {
+  const due = plan ? (dueCount?.(plan) ?? 0) : 0
   const v = valuate(item, rates)
   const money = moneyDisplay(v.valueInCurrency, v.currency, v.value, v.missingRate)
   const fund = isFund(item)
@@ -353,6 +390,57 @@ function ItemRow({
           <Trash2 size={14} />
         </button>
       </div>
+
+      {/* 定期划扣：剩余期数 / 每期金额 / 到期提示与操作 */}
+      {plan ? (
+        <div className="border-t border-line px-3.5 py-2.5" data-testid={'plan-' + plan.itemId}>
+          <div className="flex items-start justify-between gap-2 text-[11.5px]">
+            <span className="inline-flex min-w-0 items-center gap-1.5 text-ink3">
+              {due > 0 ? (
+                <span
+                  className="h-1.5 w-1.5 shrink-0 rounded-full bg-danger"
+                  data-testid={'plan-dot-' + plan.itemId}
+                />
+              ) : null}
+              <span className="truncate">
+                {plan.name} · 剩余 {plan.remainingTerms} 期 · {INTERVAL_LABEL[plan.interval]}{' '}
+                {formatCNY(plan.perTermAmount)} 元
+              </span>
+            </span>
+            <span className={'shrink-0 text-right ' + (due > 0 ? 'tone-danger' : 'text-ink4')}>
+              {due > 0
+                ? '待确认还款（' + due + ' 期 · ' + formatCNY(due * plan.perTermAmount) + '）'
+                : '下次 ' + plan.nextDueDate}
+            </span>
+          </div>
+          <div className="mt-1.5 flex items-center gap-1.5">
+            {due > 0 ? (
+              <>
+                <button
+                  type="button"
+                  data-testid={'plan-confirm-' + plan.itemId}
+                  className="btn-primary px-3 py-1.5 text-[12px]"
+                  onClick={() => onConfirmTerm?.(plan)}
+                >
+                  确认扣款
+                </button>
+                <button
+                  type="button"
+                  data-testid={'plan-skip-' + plan.itemId}
+                  className="btn-ghost px-3 py-1.5 text-[12px]"
+                  onClick={() => onSkipReminder?.(plan)}
+                >
+                  忽略提醒
+                </button>
+              </>
+            ) : null}
+            <span className="ml-auto text-[11px] text-ink4">
+              欠款 {formatCNY(plan.remainingAmount)} · 已扣 {plan.paidTerms} 期
+              {plan.countFullAmount ? ' · 全额计入负债' : ' · 按每期计入负债'}
+            </span>
+          </div>
+        </div>
+      ) : null}
     </li>
   )
 }

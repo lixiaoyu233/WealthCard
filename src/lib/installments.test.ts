@@ -11,6 +11,7 @@ import {
   monthlyTotal,
   normalizeInstallmentFile,
   payInstallmentTerm,
+  skipOverdueReminder,
   syncInstallmentAmounts,
   totalLiability,
   withdrawFromCashItem,
@@ -120,6 +121,29 @@ describe('到期判断（不自动扣，只提示）', () => {
   it('已结清永远不算到期；未处理期数不超过剩余期数', () => {
     expect(duePeriodCount(plan({ remainingTerms: 0 }), '2030-01-01')).toBe(0)
     expect(duePeriodCount(plan({ nextDueDate: '2020-01-01', remainingTerms: 2 }), '2030-01-01')).toBe(2)
+  })
+})
+
+describe('忽略过期提醒', () => {
+  it('把下次扣款日推到今天之后，但不动期数与欠款', () => {
+    const next = skipOverdueReminder(plan({ nextDueDate: '2026-04-10', remainingTerms: 6, remainingAmount: 6000 }), '2026-06-20')
+    expect(next.nextDueDate).toBe('2026-07-10')
+    expect(next.remainingTerms).toBe(6)
+    expect(next.remainingAmount).toBe(6000)
+    expect(next.paidTerms).toBe(0)
+  })
+
+  it('每季度按 3 个月推进；未到期时原样返回', () => {
+    expect(
+      skipOverdueReminder(plan({ nextDueDate: '2026-01-15', interval: 'quarterly' }), '2026-06-20').nextDueDate,
+    ).toBe('2026-07-15')
+    const fresh = plan({ nextDueDate: '2026-08-10' })
+    expect(skipOverdueReminder(fresh, '2026-06-20')).toBe(fresh)
+  })
+
+  it('已结清的计划不动', () => {
+    const done = plan({ remainingTerms: 0, nextDueDate: '2020-01-01' })
+    expect(skipOverdueReminder(done, '2026-06-20')).toBe(done)
   })
 })
 

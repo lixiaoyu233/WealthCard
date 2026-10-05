@@ -10,6 +10,10 @@ interface CategoryCardProps {
   hidden?: boolean
   /** 汇率：外币条目折算用 */
   rates?: FxRates | null
+  /** 该分类下已到期未处理的划扣期数（>0 时卡片上亮红点提示） */
+  dueReminders?: number
+  /** 该分类的「每月还款合计」 */
+  planMonthly?: number
   onOpen: (category: Category) => void
 }
 
@@ -17,7 +21,14 @@ interface CategoryCardProps {
  * 资产分类卡片：左侧彩色半透明图标 + 名称 + 副标题，右侧金额 + 项数标签。
  * 基金分类额外展示持仓盈亏（红涨绿跌）。
  */
-export default function CategoryCard({ category, hidden, rates, onOpen }: CategoryCardProps) {
+export default function CategoryCard({
+  category,
+  hidden,
+  rates,
+  dueReminders = 0,
+  planMonthly = 0,
+  onOpen,
+}: CategoryCardProps) {
   const Icon = resolveIcon(category.icon)
   const total = categoryTotal(category, rates)
   const count = categoryCountLabel(category)
@@ -98,6 +109,25 @@ export default function CategoryCard({ category, hidden, rates, onOpen }: Catego
 
         <ChevronRight size={16} className="shrink-0 text-ink4 transition group-hover:text-ink4" />
       </div>
+
+      {/* 定期划扣：到期未处理时亮红点 + 「待确认还款」 */}
+      {dueReminders > 0 ? (
+        <div
+          className="relative mt-2.5 flex items-center gap-1.5 border-t border-line pt-2.5 text-[11.5px]"
+          data-testid={'category-plan-due-' + category.id}
+        >
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-danger" />
+          <span className="font-medium tone-danger">待确认还款</span>
+          <span className="text-ink4">（{dueReminders} 期）</span>
+          {planMonthly > 0 ? (
+            <span className="ml-auto text-ink4">每月 {formatCNY(planMonthly)} 元</span>
+          ) : null}
+        </div>
+      ) : planMonthly > 0 ? (
+        <div className="relative mt-2.5 flex items-center gap-1.5 border-t border-line pt-2.5 text-[11.5px] text-ink4">
+          <span>定期划扣 · 每月 {formatCNY(planMonthly)} 元</span>
+        </div>
+      ) : null}
 
       {hasFunds ? (
         <div className="relative mt-2.5 flex items-center gap-1.5 border-t border-line pt-2.5 text-[11.5px]">

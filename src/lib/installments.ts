@@ -185,6 +185,23 @@ export function duePeriodCount(plan: InstallmentPlan, today: string): number {
 
 export const isDue = (plan: InstallmentPlan, today: string): boolean => duePeriodCount(plan, today) > 0
 
+/**
+ * 忽略过期提醒：把「下次扣款日」推进到今天之后，**不动剩余期数与欠款**。
+ * 口径是「1.0 只看个大概」——漏掉的期次不追扣，用户想对齐就自己改计划。
+ */
+export function skipOverdueReminder(plan: InstallmentPlan, today: string): InstallmentPlan {
+  if (!isActive(plan)) return plan
+  // 没到期就原样返回（保持对象引用不变，避免无意义的状态写入）
+  if (plan.nextDueDate > today) return plan
+  let next = plan.nextDueDate
+  let guard = 0
+  while (next <= today && guard < 600) {
+    next = addMonths(next, INTERVAL_MONTHS[plan.interval])
+    guard += 1
+  }
+  return { ...plan, nextDueDate: next }
+}
+
 /* ------------------------------------------------------------------ *
  * 规范化 / 读写
  * ------------------------------------------------------------------ */
@@ -270,6 +287,24 @@ export function saveInstallmentFile(file: InstallmentFile): string | null {
     return e instanceof Error ? `定期划扣保存失败：${e.message}` : '定期划扣保存失败'
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * 增删改（纯函数）
+ * ------------------------------------------------------------------ */
+
+export function upsertPlan(file: InstallmentFile, plan: InstallmentPlan): InstallmentFile {
+  const plans = file.plans.some((p) => p.id === plan.id)
+    ? file.plans.map((p) => (p.id === plan.id ? plan : p))
+    : [...file.plans, plan]
+  return { ...file, plans }
+}
+
+export function removePlan(file: InstallmentFile, planId: string): InstallmentFile {
+  return { ...file, plans: file.plans.filter((p) => p.id !== planId) }
+}
+
+export const planForItem = (plans: InstallmentPlan[], itemId: string): InstallmentPlan | undefined =>
+  plans.find((p) => p.itemId === itemId)
 
 /* ------------------------------------------------------------------ *
  * 扣款（纯函数）

@@ -6,6 +6,7 @@ import { createDefaultSettings } from '../lib/settings'
 import type { DividendRecord } from '../lib/dividends'
 import { makeDividends } from '../test/fixtures'
 import DividendHomeCard from './DividendHomeCard'
+import { MARK_CLASS } from './DividendMonthCalendar'
 
 const portfolio: Portfolio = {
   version: 2,
@@ -72,6 +73,21 @@ const setToday = () => {
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
+})
+
+describe('日历标记的类名（回归守卫）', () => {
+  it('不用「变量色 + 透明度」的类：Tailwind 不会为 var(--x) 生成这类类名，圆点会直接消失', () => {
+    for (const cls of Object.values(MARK_CLASS)) {
+      expect(cls).not.toMatch(/(bg|border|text|ring)-(ink[1-4]|line|line-strong|s[1-4]|app|invert)\/\d+/)
+    }
+  })
+
+  it('三种标记都用真实存在的类（实心红点 / 橙虚圈 / 灰实心点）', () => {
+    expect(MARK_CLASS.confirmed).toContain('bg-danger')
+    expect(MARK_CLASS.estimated).toContain('border-dashed')
+    expect(MARK_CLASS.estimated).toContain('border-warn')
+    expect(MARK_CLASS.produced).toContain('bg-ink3')
+  })
 })
 
 describe('首页分红日历', () => {

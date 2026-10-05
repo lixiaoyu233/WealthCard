@@ -12,6 +12,17 @@ export interface RowBox {
 }
 
 /** 数组换位，越界或原地不动时原样返回 */
+/**
+ * 顶部「当前策略 · 偏离度」那一行的开关：
+ * 首页把「投资策略」区块关掉后，这一行就不再显示。
+ */
+export function strategyStatusFor<T extends { text: string; level: string }>(
+  strategyVisible: boolean,
+  status: T,
+): T | undefined {
+  return strategyVisible ? status : undefined
+}
+
 export function arrayMove<T>(list: T[], from: number, to: number): T[] {
   if (from === to || from < 0 || to < 0 || from >= list.length || to >= list.length) return list
   const next = [...list]

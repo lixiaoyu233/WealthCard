@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { arrayMove, dragShifts, dropIndexFromDrag, type RowBox } from './homeLayout'
+import { arrayMove, dragShifts, dropIndexFromDrag, strategyStatusFor, type RowBox } from './homeLayout'
 
 /** 三行、每行高 60：中线分别在 30 / 90 / 150 */
 const boxes: RowBox[] = [
@@ -7,6 +7,18 @@ const boxes: RowBox[] = [
   { top: 60, height: 60 },
   { top: 120, height: 60 },
 ]
+
+describe('strategyStatusFor：首页策略状态行的开关', () => {
+  const status = { text: '当前策略：偏离度 3.2%', level: 'healthy' as const }
+
+  it('区块打开时原样返回', () => {
+    expect(strategyStatusFor(true, status)).toBe(status)
+  })
+
+  it('区块关闭时返回 undefined（顶部不再显示这一行）', () => {
+    expect(strategyStatusFor(false, status)).toBeUndefined()
+  })
+})
 
 describe('arrayMove', () => {
   it('把元素移到目标位置', () => {

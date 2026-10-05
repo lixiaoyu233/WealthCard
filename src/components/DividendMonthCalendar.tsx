@@ -14,12 +14,20 @@ const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日']
 
 type Mark = 'confirmed' | 'estimated' | 'produced'
 
-/** 标记样式：红圈=已确认、虚圈=预计、实心点=已产生 */
-const MARK_CLASS: Record<Mark, string> = {
-  confirmed: 'border border-danger',
-  estimated: 'border border-dashed border-ink4/70',
-  produced: 'border border-transparent bg-ink4/60',
+/**
+ * 标记样式：实心红点=已确认、橙色虚圈=预计、灰色实心点=已产生。
+ *
+ * ⚠️ 不要写 `bg-ink4/60` 这类「变量色 + 透明度」的类：tailwind.config 里颜色是
+ * 普通 `var(--x)` 字符串，Tailwind 不会为它生成带透明度的类名 —— 类名不存在，
+ * 圆点就会既没底色也没边框（两种主题下都看不见）。需要半透明请用 index.css 里
+ * 手写 color-mix 的 .tone-* / .chip 这类类。
+ */
+export const MARK_CLASS: Record<Mark, string> = {
+  confirmed: 'bg-danger',
+  estimated: 'border-2 border-dashed border-warn',
+  produced: 'bg-ink3',
 }
+const MARK_SIZE = 'h-3 w-3'
 
 /** 首页的「真实月历」：可翻月、有分红的日子画标记、点某天看当天明细 */
 export default function DividendMonthCalendar({
@@ -112,7 +120,7 @@ export default function DividendMonthCalendar({
                 {cell.day}
               </span>
               <span className="mt-0.5 flex h-2.5 items-center">
-                {mark ? <span className={`block h-2.5 w-2.5 rounded-full ${MARK_CLASS[mark]}`} /> : null}
+                {mark ? <span className={`block rounded-full ${MARK_SIZE} ${MARK_CLASS[mark]}`} /> : null}
               </span>
             </button>
           )
@@ -121,13 +129,13 @@ export default function DividendMonthCalendar({
 
       <div className="mt-1.5 flex items-center gap-3 text-[10px] text-ink4">
         <span className="inline-flex items-center gap-1">
-          <span className="h-2.5 w-2.5 rounded-full border border-danger" /> 已确认
+          <span className={`block rounded-full ${MARK_SIZE} ${MARK_CLASS.confirmed}`} /> 已确认
         </span>
         <span className="inline-flex items-center gap-1">
-          <span className="h-2.5 w-2.5 rounded-full border border-dashed border-ink4/70" /> 预计
+          <span className={`block rounded-full ${MARK_SIZE} ${MARK_CLASS.estimated}`} /> 预计
         </span>
         <span className="inline-flex items-center gap-1">
-          <span className="h-2.5 w-2.5 rounded-full bg-ink4/60" /> 已产生
+          <span className={`block rounded-full ${MARK_SIZE} ${MARK_CLASS.produced}`} /> 已产生
         </span>
       </div>
     </div>
