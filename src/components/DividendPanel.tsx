@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import type { Portfolio } from '../types/asset'
 import type { FxRates } from '../lib/currency'
-import { estimateAmountCny, holdingKey, type DividendMode } from '../lib/dividends'
+import { estimateAmountCny, holdingKey, orphanRecords, type DividendMode } from '../lib/dividends'
 import { buildMonthView, buildPeriodSummary, type DividendPeriod } from '../lib/dividendCalendar'
 import { HOLDING_MARKET_CURRENCY, HOLDING_MARKET_LABEL, type HoldingMarket } from '../lib/usStock'
 import type { DividendSettings } from '../lib/settings'
@@ -11,6 +11,7 @@ import DividendEventRow, { type DividendRowContext } from './DividendEventRow'
 import { formatCNY, todayKey } from '../lib/format'
 import DepositTargetPicker from './DepositTargetPicker'
 import DividendForm, { type DividendFormTarget } from './DividendForm'
+import ConfirmDialog from './ConfirmDialog'
 
 type Tab = 'calendar' | 'pending' | 'settings'
 
@@ -47,6 +48,8 @@ export default function DividendPanel({
   const [tab, setTab] = useState<Tab>('calendar')
   const [period, setPeriod] = useState<DividendPeriod>('year')
   const [formTarget, setFormTarget] = useState<DividendFormTarget | null>(null)
+  /** 「清理失效分红」的二次确认 */
+  const [cleanupOpen, setCleanupOpen] = useState(false)
 
   const today = todayKey()
   const tax = { us: dividendSettings.usTaxRate, hk: dividendSettings.hkTaxRate }
@@ -79,6 +82,9 @@ export default function DividendPanel({
   }, [portfolio, dividends.records])
 
   /** 行组件的运行环境：设置页与首页卡片共用同一个组件，避免两处行为漂移 */
+  /** 持仓已删除的分红记录（允许清理，含已入账的） */
+  const orphans = useMemo(() => orphanRecords(portfolio, dividends.records), [portfolio, dividends.records])
+
   const rowCtx: DividendRowContext = {
     portfolio,
     dividends,
@@ -128,6 +134,26 @@ export default function DividendPanel({
             </button>
           </div>
           {dividends.error ? <p className="text-[11.5px] tone-warn">分红抓取失败：{dividends.error}</p> : null}
+
+          {/* 持仓已删除的孤儿分红：给一个一键清理入口 */}
+          {orphans.length > 0 ? (
+            <div
+              className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-s2 px-3 py-2 text-[11.5px] text-ink4"
+              data-testid="dividend-orphan-bar"
+            >
+              <span>
+                有 {orphans.length} 条分红对应的持仓已删除（已入账的也在内），可以清理掉
+              </span>
+              <button
+                type="button"
+                data-testid="dividend-cleanup-orphans"
+                className="ml-auto text-ink3 underline-offset-2 hover:underline"
+                onClick={() => setCleanupOpen(true)}
+              >
+                全部清理
+              </button>
+            </div>
+          ) : null}
 
           <div>
             <p className="mb-1.5 text-[11.5px] text-ink4">已确认（{view.confirmed.length}）</p>
@@ -304,6 +330,19 @@ export default function DividendPanel({
           </p>
         </div>
       ) : null}
+
+      <ConfirmDialog
+        open={cleanupOpen}
+        title={`清理 ${orphans.length} 条失效分红？`}
+        description="这些分红对应的持仓已经删除。已入账的金额不会退回（钱已经在账户里），只是把日历记录清掉。"
+        confirmText="确认清理"
+        onConfirm={() => {
+          orphans.forEach((r) => dividends.remove(r.id))
+          notify(`已清理 ${orphans.length} 条失效分红`, 'success')
+          setCleanupOpen(false)
+        }}
+        onCancel={() => setCleanupOpen(false)}
+      />
     </div>
   )
 }

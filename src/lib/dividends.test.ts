@@ -9,6 +9,8 @@ import {
   depositToCashItem,
   findHolding,
   findHoldings,
+  isOrphanRecord,
+  orphanRecords,
   reinvestSharesAcross,
   modeOf,
   normalizeDividendFile,
@@ -232,5 +234,25 @@ describe('两个平台买同一只基金：分红要作用到所有条目', () =
   it('itemId 绑定的记录只作用于那一条', () => {
     const p = twoPlatforms()
     expect(findHoldings(p, record({ itemId: 'f2', code: '016452', market: 'cn' })).map((h) => h.id)).toEqual(['f2'])
+  })
+})
+
+
+describe('删除持仓后留下的分红记录（孤儿记录）', () => {
+  it('isOrphanRecord：持仓不在了算失效，还在就不算', () => {
+    const p = pf([cat('cat_stock', [fund('i1', '600519', 1000, 1, 'ashare')])])
+    expect(isOrphanRecord(p, record({ code: '600519', market: 'ashare' }))).toBe(false)
+    expect(isOrphanRecord(p, record({ code: '000858', market: 'ashare' }))).toBe(true)
+    // 市场对不上也算失效（同代码不同市场是两回事）
+    expect(isOrphanRecord(p, record({ code: '600519', market: 'us' }))).toBe(true)
+  })
+
+  it('orphanRecords 过滤出失效的那些', () => {
+    const p = pf([cat('cat_stock', [fund('i1', '600519', 1000, 1, 'ashare')])])
+    const rs = [
+      record({ id: 'a', code: '600519', market: 'ashare' }),
+      record({ id: 'b', code: '000858', market: 'ashare' }),
+    ]
+    expect(orphanRecords(p, rs).map((r) => r.id)).toEqual(['b'])
   })
 })

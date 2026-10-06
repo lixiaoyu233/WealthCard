@@ -220,3 +220,56 @@ describe('分红设置', () => {
     expect(onSetDividendSettings).toHaveBeenCalledWith({ usTaxRate: 0.3 })
   })
 })
+
+
+describe('已入账 / 持仓已删除的分红也能删掉', () => {
+  const orphanRecord = record({
+    id: 'gone',
+    code: '000858', // 组合里没有这只
+    market: 'ashare',
+    applied: true,
+    appliedAt: 1,
+  })
+
+  it('已入账的孤儿记录：显示已入账、提示持仓已删除、并给出删除按钮', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 5, 10))
+    renderPanel({ records: [orphanRecord] })
+    expect(screen.getByTestId('dividend-row-gone').textContent).toContain('已入账')
+    expect(screen.getByTestId('dividend-row-gone').textContent).toContain('对应持仓已删除')
+    expect(screen.getByTestId('dividend-delete-gone')).toBeTruthy()
+  })
+
+  it('删除前二次确认，文案说明「已入账的钱不退」', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 5, 10))
+    const remove = vi.fn()
+    renderPanel({ records: [orphanRecord], dividends: makeDividends({ records: [orphanRecord], remove }) })
+    fireEvent.click(screen.getByTestId('dividend-delete-gone'))
+    expect(screen.getByText('删除这条分红？')).toBeTruthy()
+    expect(screen.getByText(/已入账的金额不会退回/)).toBeTruthy()
+    fireEvent.click(screen.getByText('删除'))
+    expect(remove).toHaveBeenCalledWith('gone')
+  })
+
+  it('顶部提示条 + 「全部清理」一次删掉所有失效记录', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 5, 10))
+    const records = [orphanRecord, record({ id: 'gone2', code: '000859', market: 'ashare' })]
+    const remove = vi.fn()
+    renderPanel({ records, dividends: makeDividends({ records, remove }) })
+    expect(screen.getByTestId('dividend-orphan-bar').textContent).toContain('2 条')
+    fireEvent.click(screen.getByTestId('dividend-cleanup-orphans'))
+    fireEvent.click(screen.getByText('确认清理'))
+    expect(remove).toHaveBeenCalledWith('gone')
+    expect(remove).toHaveBeenCalledWith('gone2')
+  })
+
+  it('未入账的手动记录也能删（以前只有手动记录才有删除按钮，自动的没有）', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 5, 10))
+    const auto = record({ id: 'auto1', code: '600519', market: 'ashare', source: 'auto' })
+    renderPanel({ records: [auto] })
+    expect(screen.getByTestId('dividend-delete-auto1')).toBeTruthy()
+  })
+})

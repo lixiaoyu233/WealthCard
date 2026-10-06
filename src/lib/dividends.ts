@@ -282,6 +282,25 @@ export function findHoldings(
   return funds.filter((i) => (i.market ?? 'cn') === record.market && i.code.trim().toUpperCase() === code)
 }
 
+/**
+ * 这条分红对应的持仓是否已经不存在了（删掉股票/基金后，日历里会留下孤儿记录）。
+ * 界面上据此提示并提供「清理」入口。
+ */
+export function isOrphanRecord(
+  portfolio: Portfolio,
+  record: Pick<DividendRecord, 'itemId' | 'market' | 'code'>,
+): boolean {
+  return findHoldings(portfolio, record).length === 0
+}
+
+/** 所有失效记录（持仓已删除） */
+export function orphanRecords(
+  portfolio: Portfolio,
+  records: DividendRecord[],
+): DividendRecord[] {
+  return records.filter((r) => isOrphanRecord(portfolio, r))
+}
+
 /** 第一条匹配的持仓（保持旧行为；多处持仓时请用 findHoldings） */
 export function findHolding(
   portfolio: Portfolio,

@@ -5,9 +5,11 @@ import type { FxRates } from '../lib/currency'
 import {
   estimateAmountCny,
   holdingKey,
+  isOrphanRecord,
   type DividendMode,
   type DividendRecord,
 } from '../lib/dividends'
+import ConfirmDialog from './ConfirmDialog'
 import { fetchCloseOnDate } from '../lib/priceHistory'
 import { HOLDING_MARKET_LABEL } from '../lib/usStock'
 import type { FundingSource } from '../lib/settings'
@@ -43,8 +45,11 @@ interface DividendEventRowProps {
 export default function DividendEventRow({ record: r, kind, basis, ctx }: DividendEventRowProps) {
   const [price, setPrice] = useState('')
   const [fetching, setFetching] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   const amount = estimateAmountCny(ctx.portfolio, r, ctx.tax, ctx.rates)
+  /** 持仓被删掉后留下的孤儿记录：允许清理（包括已入账的） */
+  const orphan = isOrphanRecord(ctx.portfolio, r)
   const mode: DividendMode =
     r.mode ?? ctx.dividends.prefs[holdingKey(r.market, r.code)] ?? ctx.defaultMode
 
@@ -102,9 +107,9 @@ export default function DividendEventRow({ record: r, kind, basis, ctx }: Divide
         </div>
       </div>
 
-      {kind === 'confirmed' && !r.applied ? (
+      {kind === 'confirmed' ? (
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          {mode === 'cash' ? (
+          {r.applied ? null : mode === 'cash' ? (
             <button
               type="button"
               data-testid={`dividend-cash-${r.id}`}
@@ -142,7 +147,7 @@ export default function DividendEventRow({ record: r, kind, basis, ctx }: Divide
               </button>
             </>
           )}
-          {r.bonusRatio ? (
+          {!r.applied && r.bonusRatio ? (
             <button
               type="button"
               data-testid={`dividend-bonus-${r.id}`}
@@ -152,12 +157,14 @@ export default function DividendEventRow({ record: r, kind, basis, ctx }: Divide
               应用送转 10 送转 {r.bonusRatio} 股
             </button>
           ) : null}
-          {r.source === 'manual' && !ctx.hideDelete ? (
+          {/* 删除入口：手动/自动都允许，已入账也允许（只删日历记录，已入账的钱不动） */}
+          {!ctx.hideDelete ? (
             <button
               type="button"
+              data-testid={`dividend-delete-${r.id}`}
               aria-label="删除该分红记录"
               className="ml-auto rounded-full p-1.5 text-ink4 transition hover:bg-danger/10 hover:tone-danger"
-              onClick={() => ctx.dividends.remove(r.id)}
+              onClick={() => setConfirmDelete(true)}
             >
               <Trash2 size={13} />
             </button>
@@ -165,6 +172,31 @@ export default function DividendEventRow({ record: r, kind, basis, ctx }: Divide
         </div>
       ) : null}
       {r.applied ? <p className="mt-1.5 text-[11px] tone-down">✓ 已入账</p> : null}
+      {orphan ? (
+        <p className="mt-1 text-[11px] leading-relaxed tone-warn">
+          ⚠ 对应持仓已删除，这条分红可以清理掉
+        </p>
+      ) : null}
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title="删除这条分红？"
+        description={[
+          orphan ? '对应持仓已删除。' : '',
+          r.applied
+            ? `这条已入账（约 ${formatCNY(amount, 2)} 元已加进账户），删除只移除日历记录，已入账的金额不会退回。`
+            : '删除后这条分红不再出现在日历里，不影响持仓。',
+        ]
+          .filter(Boolean)
+          .join('')}
+        confirmText="删除"
+        onConfirm={() => {
+          ctx.dividends.remove(r.id)
+          ctx.notify('已删除这条分红记录', 'success')
+          setConfirmDelete(false)
+        }}
+        onCancel={() => setConfirmDelete(false)}
+      />
     </li>
   )
 }
