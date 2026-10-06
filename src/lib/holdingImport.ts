@@ -57,6 +57,8 @@ export interface ParsedHolding {
   currency?: CurrencyCode
   note?: string
   issues: ImportIssue[]
+  /** 用户选择「合并到已有条目」时，目标条目的 id */
+  mergeInto?: string
   /** 非空的数字来自哪里（界面据此标注「由市值推算」等） */
   sources?: {
     shares?: FieldSource
@@ -434,6 +436,12 @@ export function parseHoldingText(text: string, options: ParseOptions = {}): Impo
       notes.push(line.replace(/^(#|\/\/)\s*/, ''))
       continue
     }
+    // AI 常常把「校验：…」「存疑：…」「缺少：…」写成普通行（没加 #）。
+    // 这些是说明，不是数据 —— 当成注释收起来，别报成"这一行没有键=值"的错。
+    if (!line.includes('=') && /^(校验|核对|存疑|缺少|缺|说明|备注|提示|注意|换算|合计|汇总|总计|总结|风险)[:：]/.test(line)) {
+      notes.push(line)
+      continue
+    }
     body.push({ line: i + 1, text: line })
   }
 
@@ -529,12 +537,73 @@ export function appendHoldings(
   }
 }
 
+export interface ExistingHolding {
+  id: string
+  code: string
+  market?: HoldingMarket
+  name?: string
+  shares?: number
+  costNav?: number
+}
+
+/** 在已有持仓里找同「代码 + 市场」的那一条（找不到返回 undefined） */
+export function findExistingHolding(
+  holding: Pick<ParsedHolding, 'code' | 'market'>,
+  existing: ExistingHolding[],
+  codeOverride?: string,
+): ExistingHolding | undefined {
+  const code = (codeOverride ?? holding.code ?? '').trim().toUpperCase()
+  if (!code) return undefined
+  const market = holding.market ?? 'cn'
+  return existing.find((e) => (e.market ?? 'cn') === market && e.code.trim().toUpperCase() === code)
+}
+
 /** 同代码（同市场）在已有持仓里的重复项 */
-export function findDuplicate(
-  holding: ParsedHolding,
-  existing: Array<{ code: string; market?: HoldingMarket }>,
-): boolean {
-  return existing.some(
-    (e) => e.code.trim().toUpperCase() === holding.code.toUpperCase() && (e.market ?? 'cn') === holding.market,
-  )
+export function findDuplicate(holding: ParsedHolding, existing: ExistingHolding[]): boolean {
+  return !!findExistingHolding(holding, existing)
+}
+
+export interface MergeInput {
+  itemId: string
+  /** 要并进去的份额 */
+  shares: number
+  /** 这一笔的成本单价（用来算加权平均） */
+  costNav: number
+  note?: string
+}
+
+/**
+ * 把导入的持仓合并进已有条目：**份额相加 + 成本加权平均**（备注追加）。
+ * 「两个平台买了同一只基金」时用它，避免在列表里出现同名两条。
+ */
+export function mergeHoldingsInto(
+  portfolio: Portfolio,
+  merges: MergeInput[],
+): { portfolio: Portfolio; merged: number; skipped: number } {
+  if (merges.length === 0) return { portfolio, merged: 0, skipped: 0 }
+  const byId = new Map(merges.map((m) => [m.itemId, m]))
+  let merged = 0
+  let skipped = 0
+  const categories = portfolio.categories.map((category) => {
+    const items = category.items.map((item) => {
+      const input = byId.get(item.id)
+      if (!input || item.kind !== 'fund') return item
+      const oldShares = Number.isFinite(item.shares) ? item.shares : 0
+      const oldCost = Number.isFinite(item.costNav) ? item.costNav : 0
+      const addShares = Number.isFinite(input.shares) && input.shares > 0 ? input.shares : 0
+      if (addShares <= 0) return item
+      const totalShares = oldShares + addShares
+      const costNav = totalShares > 0 ? (oldShares * oldCost + addShares * input.costNav) / totalShares : oldCost
+      merged += 1
+      return {
+        ...item,
+        shares: totalShares,
+        costNav,
+        note: [item.note, input.note].filter(Boolean).join(' · ') || undefined,
+      }
+    })
+    return { ...category, items }
+  })
+  skipped = merges.length - merged
+  return merged > 0 ? { portfolio: { ...portfolio, categories }, merged, skipped } : { portfolio, merged: 0, skipped }
 }

@@ -6,6 +6,7 @@ import {
   appendHoldings,
   cleanNumber,
   findDuplicate,
+  mergeHoldingsInto,
   markdownTableToLines,
   parseHoldingText,
 } from './holdingImport'
@@ -197,9 +198,9 @@ describe('Markdown 表格（AI 很爱输出表格）', () => {
 describe('重复检测', () => {
   it('同市场同代码算重复（忽略大小写）', () => {
     const [holding] = parseHoldingText('类型=股票 市场=美股 代码=spy 份额=10 成本单价=520').holdings
-    expect(findDuplicate(holding, [{ code: 'SPY', market: 'us' }])).toBe(true)
-    expect(findDuplicate(holding, [{ code: 'SPY', market: 'hk' }])).toBe(false)
-    expect(findDuplicate(holding, [{ code: 'QQQ', market: 'us' }])).toBe(false)
+    expect(findDuplicate(holding, [{ id: 'a', code: 'SPY', market: 'us' }])).toBe(true)
+    expect(findDuplicate(holding, [{ id: 'b', code: 'SPY', market: 'hk' }])).toBe(false)
+    expect(findDuplicate(holding, [{ id: 'c', code: 'QQQ', market: 'us' }])).toBe(false)
   })
 })
 
@@ -312,5 +313,78 @@ describe('金额模式：只有名称 + 金额的截图（很多平台总览页�
     const r = parseHoldingText(table)
     expect(r.failed).toEqual([])
     expect(r.holdings[0]).toMatchObject({ mode: 'amount', amount: 9.85, profit: -0.11 })
+  })
+})
+
+
+describe('AI 的说明行（没有 # 前缀）', () => {
+  it('「校验：…」「存疑：…」当注释收起来，不报成错误行', () => {
+    const r = parseHoldingText(
+      [
+        '类型=基金 名称=景顺长城沪港深红利成长低波指数A 金额=10.28 持仓收益=0.28',
+        '',
+        '校验：共 8 条，字段完整 8 条',
+        '存疑：全部标的的代码、份额、成本单价截图内未展示',
+      ].join('\n'),
+    )
+    expect(r.failed).toEqual([])
+    expect(r.holdings).toHaveLength(1)
+    expect(r.notes).toEqual([
+      '校验：共 8 条，字段完整 8 条',
+      '存疑：全部标的的代码、份额、成本单价截图内未展示',
+    ])
+  })
+
+  it('其他说明词也认（缺少 / 换算 / 说明 / 合计）', () => {
+    const r = parseHoldingText(
+      ['类型=基金 名称=x 金额=1', '缺少：腾讯控股的成本', '换算：3 手 → 300 股', '说明：截图只有总览', '合计：8 条'].join(
+        '\n',
+      ),
+    )
+    expect(r.failed).toEqual([])
+    expect(r.notes).toHaveLength(4)
+  })
+
+  it('既没说明词又没键=值的行，仍然报错（真的是脏数据）', () => {
+    const r = parseHoldingText('类型=基金 名称=x 金额=1\n随便写点什么')
+    expect(r.failed).toHaveLength(1)
+    expect(r.notes).toEqual([])
+  })
+})
+
+
+describe('合并到已有条目：份额相加 + 成本加权平均', () => {
+  it('两条并成一条', () => {
+    const portfolio = {
+      version: 2,
+      history: [],
+      categories: [
+        {
+          id: 'cat_fund',
+          name: '基金',
+          subtitle: '',
+          icon: 'x',
+          color: '#888',
+          items: [{ id: 'f1', kind: 'fund' as const, name: '南方纳斯达克100', code: '016452', market: 'cn' as const, shares: 10, costNav: 2 }],
+        },
+      ],
+    } as unknown as Portfolio
+    const res = mergeHoldingsInto(portfolio, [{ itemId: 'f1', shares: 4.39, costNav: 2.2778, note: '支付宝' }])
+    expect(res.merged).toBe(1)
+    const item = res.portfolio.categories[0].items[0] as unknown as { shares: number; costNav: number; note?: string }
+    expect(item.shares).toBeCloseTo(14.39, 6)
+    expect(item.costNav).toBeCloseTo((10 * 2 + 4.39 * 2.2778) / 14.39, 6)
+    expect(item.note).toBe('支付宝')
+  })
+
+  it('份额为 0 的合并请求被跳过（不会把条目改坏）', () => {
+    const portfolio = {
+      version: 2,
+      history: [],
+      categories: [{ id: 'c', name: 'c', subtitle: '', icon: 'x', color: '#888', items: [{ id: 'f1', kind: 'fund' as const, name: 'x', code: '1', shares: 10, costNav: 2 }] }],
+    } as unknown as Portfolio
+    const res = mergeHoldingsInto(portfolio, [{ itemId: 'f1', shares: 0, costNav: 1 }])
+    expect(res.merged).toBe(0)
+    expect(res.portfolio).toBe(portfolio)
   })
 })

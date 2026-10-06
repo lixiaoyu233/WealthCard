@@ -8,6 +8,8 @@ import {
   createEmptyDividendFile,
   depositToCashItem,
   findHolding,
+  findHoldings,
+  reinvestSharesAcross,
   modeOf,
   normalizeDividendFile,
   reinvestShares,
@@ -186,5 +188,49 @@ describe('偏好与工具', () => {
   it('roundMoney 保留两位', () => {
     expect(roundMoney(1.005)).toBe(1.01)
     expect(roundMoney(2.344)).toBe(2.34)
+  })
+})
+
+
+describe('两个平台买同一只基金：分红要作用到所有条目', () => {
+  const twoPlatforms = () =>
+    pf([cat('cat_fund', [fund('f1', '016452', 4.39, 2.2778, 'cn'), fund('f2', '016452', 10, 2.1, 'cn')])])
+  const rec = record({ itemId: undefined, code: '016452', market: 'cn', cashPerUnit: 0.1, currency: 'CNY' })
+
+  it('findHoldings 返回全部同代码持仓，findHolding 仍返回第一条', () => {
+    const p = twoPlatforms()
+    expect(findHoldings(p, rec).map((h) => h.id)).toEqual(['f1', 'f2'])
+    expect(findHolding(p, rec)?.id).toBe('f1')
+  })
+
+  it('再投资按份额比例分摊，总份额不丢', () => {
+    const p = twoPlatforms()
+    const res = reinvestSharesAcross(p, [{ id: 'f1', shares: 4.39 }, { id: 'f2', shares: 10 }], 3, 2)
+    expect(res.ok).toBe(true)
+    const items = res.portfolio.categories[0].items as Array<{ id: string; shares: number; costNav: number }>
+    const f1 = items.find((i) => i.id === 'f1')!
+    const f2 = items.find((i) => i.id === 'f2')!
+    // 4.39 : 10 分摊 3 份
+    expect(f1.shares + f2.shares).toBeCloseTo(4.39 + 10 + 3, 6)
+    expect(f1.shares).toBeCloseTo(4.39 + (3 * 4.39) / 14.39, 4)
+    // 每条成本按自己的加权平均更新
+    expect(f1.costNav).toBeCloseTo((4.39 * 2.2778 + f1.shares * 0 + (f1.shares - 4.39) * 2) / f1.shares, 4)
+    expect(res.perItem).toHaveLength(2)
+  })
+
+  it('送转：两条都按同一比例调整（百分比一致）', () => {
+    const p = twoPlatforms()
+    const r1 = applyBonusShares(p, 'f1', 5)
+    const r2 = applyBonusShares(r1.portfolio, 'f2', 5)
+    const items = r2.portfolio.categories[0].items as Array<{ id: string; shares: number; costNav: number }>
+    expect(items[0].shares).toBeCloseTo(4.39 * 1.5, 6)
+    expect(items[1].shares).toBeCloseTo(10 * 1.5, 6)
+    expect(items[0].costNav).toBeCloseTo(2.2778 / 1.5, 6)
+    expect(items[1].costNav).toBeCloseTo(2.1 / 1.5, 6)
+  })
+
+  it('itemId 绑定的记录只作用于那一条', () => {
+    const p = twoPlatforms()
+    expect(findHoldings(p, record({ itemId: 'f2', code: '016452', market: 'cn' })).map((h) => h.id)).toEqual(['f2'])
   })
 })

@@ -37,13 +37,21 @@ export function normalizeFundName(name: string | undefined): string {
     .trim()
 }
 
-/** 搜素关键字：去掉结尾的份额字母（A/C/I/E），免得只搜到某一类 */
+/**
+ * 搜索关键字：把「限定词」都去掉，只留基金主体名。
+ * 例：摩根标普500指数(QDII)人民币A → 摩根标普500指数
+ *     建信富时100指数（QDII）A人民币 → 建信富时100指数
+ * 这么洗是为了让东财的模糊搜索更容易命中（它自己会处理 A/C/I 等份额）。
+ */
 export function searchKeyOf(name: string): string {
-  return normalizeFundName(name)
-    .replace(/\([^)]*\)(?=[A-Z]?$)/, '') // 去掉结尾括号里的限定（如 (QDII)）——保留主体
-    .replace(/[A-Z]$/, '')
+  const normalized = normalizeFundName(name)
+  const cleaned = normalized
+    .replace(/\([^)]*\)/g, '') // 所有括号限定：(QDII) (LOF) (后端) …
+    .replace(/(人民币|美元|港元|澳元|日元)/g, '')
+    .replace(/[A-Z]$/, '') // 结尾的份额字母 A/C/I/E
     .replace(/[()]/g, '')
-    .trim() || normalizeFundName(name)
+    .trim()
+  return cleaned || normalized
 }
 
 const isCClass = (name: string) => /\)?C$/.test(normalizeFundName(name))
@@ -77,15 +85,40 @@ export function pickFundCandidate(
   return { best: sorted[0], ambiguous: pool.length > 1 }
 }
 
-/** 名称是否足够相似（用于「官方名称 vs 截图名称」的提醒） */
-export function nameSimilar(a: string | undefined, b: string | undefined): boolean {
+/** 两个名字的相似度（公共前缀长度 / 较长者长度），0~1 */
+export function nameScore(a: string | undefined, b: string | undefined): number {
   const x = normalizeFundName(a)
   const y = normalizeFundName(b)
-  if (!x || !y) return true
-  if (x === y) return true
+  if (!x || !y) return 0
+  if (x === y) return 1
   let i = 0
   while (i < Math.min(x.length, y.length) && x[i] === y[i]) i += 1
-  return i / Math.max(x.length, y.length) >= 0.6
+  return i / Math.max(x.length, y.length)
+}
+
+/**
+ * 相似度门槛：低于它就不自动采用。
+ * 实测教训：「华安国际龙头(DAX)ETF联接A」官方名其实是「华安德国(DAX)联接(QDII)A」，
+ * 名字里没有任何公共特征 —— 这种只能让用户从候选里选或手填，绝不能悄悄挑一个错的。
+ */
+export const SIMILARITY_THRESHOLD = 0.6
+
+/** 名称是否足够相似（用于「官方名称 vs 截图名称」的提醒） */
+export function nameSimilar(a: string | undefined, b: string | undefined): boolean {
+  return nameScore(a, b) >= SIMILARITY_THRESHOLD
+}
+
+export interface ScoredPick {
+  best?: FundCandidate
+  score: number
+  ambiguous: boolean
+}
+
+/** 带分数的候选挑选（分数用来决定「敢不敢自动采用」） */
+export function pickFundCandidateScored(wantName: string, candidates: FundCandidate[]): ScoredPick {
+  const picked = pickFundCandidate(wantName, candidates)
+  if (!picked.best) return { score: 0, ambiguous: false }
+  return { best: picked.best, score: nameScore(wantName, picked.best.name), ambiguous: picked.ambiguous }
 }
 
 /* ------------------------------------------------------------------ *
@@ -212,6 +245,8 @@ export interface EnrichOptions extends SearchOptions {
   candidatesOverride?: FundCandidate[]
   /** 测试用：直接注入基金基本信息，跳过网络 */
   basicOverride?: { name?: string; ftype?: string; nav?: number; navDate?: string }
+  /** 测试用：接管搜索（按关键字返回候选） */
+  searchOverride?: (key: string) => Promise<FundCandidate[]>
 }
 
 export async function enrichHolding(holding: ParsedHolding, options: EnrichOptions = {}): Promise<Enrichment> {
@@ -238,18 +273,43 @@ export async function enrichHolding(holding: ParsedHolding, options: EnrichOptio
     } else {
       notes.push(`没搜到「${holding.name}」的代码，可手动填或保持按金额记账`)
     }
-  } else if (online && holding.name) {
-    candidates = await searchFund(searchKeyOf(holding.name), options)
-    const picked = pickFundCandidate(holding.name, candidates)
-    if (picked.best) {
-      code = picked.best.code
-      officialName = picked.best.name
-      sources.code = 'name-search'
-      if (picked.ambiguous) {
-        notes.push(`「${holding.name}」匹配到 ${candidates.length} 个份额，已选 ${picked.best.name}，可在预览里改`)
+  } else if ((online || options.searchOverride) && holding.name) {
+    const name = holding.name
+    const normalized = normalizeFundName(name)
+    // 多关键字依次尝试：清洗主体名 → 保留括号限定只去份额字母 → 原样名
+    const keys = [
+      searchKeyOf(name),
+      normalized.replace(/[A-Z]$/, ''),
+      normalized,
+    ].filter((k, i, arr) => k.length > 0 && arr.indexOf(k) === i)
+
+    let best: ScoredPick | undefined
+    for (const key of keys) {
+      const found = options.searchOverride ? await options.searchOverride(key) : await searchFund(key, options)
+      if (found.length === 0) continue
+      if (!candidates) candidates = found
+      const picked = pickFundCandidateScored(name, found)
+      if (picked.best && (!best || picked.score > best.score)) {
+        best = picked
+        candidates = found
       }
+      if (best && best.score >= 0.999) break // 完全同名，不用再试
+    }
+
+    if (best?.best && best.score >= SIMILARITY_THRESHOLD) {
+      code = best.best.code
+      officialName = best.best.name
+      sources.code = 'name-search'
+      if (best.ambiguous) {
+        notes.push(`「${name}」匹配到 ${candidates?.length ?? 0} 个份额，已选 ${best.best.name}，可在预览里改`)
+      }
+    } else if (best?.best) {
+      // 有候选但都不够像 → 不自动采用，交给用户选（宁可空着，也不要悄悄用错基）
+      notes.push(
+        `没找到与「${name}」足够接近的基金（最像的是「${best.best.name}」，相似度 ${Math.round(best.score * 100)}%）—— 请从候选中选择或手动填代码`,
+      )
     } else {
-      notes.push(`没搜到「${holding.name}」的代码，可手动填或保持按金额记账`)
+      notes.push(`没搜到「${name}」的代码，可手动填或保持按金额记账`)
     }
   }
 

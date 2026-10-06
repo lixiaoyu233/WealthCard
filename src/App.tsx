@@ -17,8 +17,7 @@ import DividendHomeCard from './components/DividendHomeCard'
 import HoldingImportSheet from './components/HoldingImportSheet'
 import ItemMappingSheet from './components/ItemMappingSheet'
 import { itemKeyOf, mappingSourceLabel, resolveItemMapping } from './lib/itemMapping'
-import { appendHoldings, type ParsedHolding } from './lib/holdingImport'
-import { collectHoldingRefs } from './lib/calc'
+import { appendHoldings, mergeHoldingsInto, type ParsedHolding } from './lib/holdingImport'
 import TrendsPanel from './components/TrendsPanel'
 import Toast, { type ToastMessage, type ToastTone } from './components/Toast'
 import { useStrategy } from './hooks/useStrategy'
@@ -261,8 +260,23 @@ export default function App() {
     const stock = portfolio.categories.find((c) => c.id === 'cat_stock' || /股票/.test(c.name))
     return { fund, stock }
   }, [portfolio.categories])
-  /** 已有持仓（代码 + 市场），用于同代码重复检测 */
-  const existingHoldings = useMemo(() => collectHoldingRefs(portfolio), [portfolio])
+  /** 已有持仓（带 id/份额/成本）：重复检测与「合并到已有」都要用 */
+  const existingHoldings = useMemo(
+    () =>
+      portfolio.categories.flatMap((category) =>
+        category.items
+          .filter(isFund)
+          .map((item) => ({
+            id: item.id,
+            code: item.code,
+            market: item.market,
+            name: item.name,
+            shares: item.shares,
+            costNav: item.costNav,
+          })),
+      ),
+    [portfolio],
+  )
 
   /** 某笔资产当前按什么算进策略（穿透/名称/分类/未归类） */
   const mappingLabelOf = useCallback(
@@ -285,7 +299,10 @@ export default function App() {
   )
 
   const handleHoldingImport = (rows: ParsedHolding[]) => {
-    const entries = rows.map((h) => {
+    // 用户选择「合并到已有」的行单独处理：份额相加 + 成本加权平均
+    const mergeRows = rows.filter((r) => r.mergeInto)
+    const freshRows = rows.filter((r) => !r.mergeInto)
+    const entries = freshRows.map((h) => {
       const target = h.type === 'fund' ? importTargets.fund : importTargets.stock
       const categoryId = target?.id ?? ''
       // 金额模式：平台总览页只有名称 + 金额 → 先按金额记一条（占比/穿透都能算），之后再补份额
@@ -313,12 +330,21 @@ export default function App() {
       }
     })
     const res = appendHoldings(portfolio, entries)
-    if (res.added === 0) {
-      notify('没有可导入的条目：目标分类不存在（先建一个「基金」或「股票」分类）', 'error')
+    const merged = mergeHoldingsInto(
+      res.portfolio,
+      mergeRows.map((r) => ({ itemId: r.mergeInto!, shares: r.shares, costNav: r.costNav ?? 0, note: r.note })),
+    )
+    if (res.added === 0 && merged.merged === 0) {
+      notify('没有可导入的条目：检查目标分类是否存在，或该行没有有效份额', 'error')
       return
     }
-    importPortfolio(res.portfolio)
-    notify(`已导入 ${res.added} 条持仓${res.skipped > 0 ? `，${res.skipped} 条缺分类已跳过` : ''}`, 'success')
+    importPortfolio(merged.portfolio)
+    const parts = [
+      res.added > 0 ? `新增 ${res.added} 条` : '',
+      merged.merged > 0 ? `合并 ${merged.merged} 条` : '',
+      res.skipped > 0 ? `${res.skipped} 条缺分类已跳过` : '',
+    ].filter(Boolean)
+    notify(`已导入：${parts.join('，')}`, 'success')
     setImportOpen(false)
   }
 

@@ -258,10 +258,15 @@ export function roundMoney(v: number): number {
 }
 
 /** 定位这笔分红对应的持仓条目：优先按 itemId，其次按「市场 + 代码」 */
-export function findHolding(
+/**
+ * 找出这笔分红对应的**所有**持仓条目。
+ * 「两个平台买了同一只基金」时会有同代码的多条 —— 分红、再投资、送转都要作用到全部，
+ * 否则第二条永远不会更新。
+ */
+export function findHoldings(
   portfolio: Portfolio,
   record: Pick<DividendRecord, 'itemId' | 'market' | 'code'>,
-): FundItem | undefined {
+): FundItem[] {
   const funds: FundItem[] = []
   for (const category of portfolio.categories) {
     for (const item of category.items) {
@@ -269,12 +274,55 @@ export function findHolding(
     }
   }
   if (record.itemId) {
-    const byId = funds.find((i) => i.id === record.itemId)
-    if (byId) return byId
+    const byId = funds.filter((i) => i.id === record.itemId)
+    if (byId.length > 0) return byId
   }
   const code = (record.code ?? '').trim().toUpperCase()
-  if (!code) return undefined
-  return funds.find((i) => (i.market ?? 'cn') === record.market && i.code.trim().toUpperCase() === code)
+  if (!code) return []
+  return funds.filter((i) => (i.market ?? 'cn') === record.market && i.code.trim().toUpperCase() === code)
+}
+
+/** 第一条匹配的持仓（保持旧行为；多处持仓时请用 findHoldings） */
+export function findHolding(
+  portfolio: Portfolio,
+  record: Pick<DividendRecord, 'itemId' | 'market' | 'code'>,
+): FundItem | undefined {
+  return findHoldings(portfolio, record)[0]
+}
+
+/**
+ * 分红再投资：把 totalAdd 份**按各条现有份额比例**分摊到多条持仓，
+ * 每条的成本按自己的加权平均更新（最后一条吃掉余数，避免浮点丢份额）。
+ */
+export function reinvestSharesAcross(
+  portfolio: Portfolio,
+  targets: Array<{ id: string; shares: number }>,
+  totalAdd: number,
+  pricePerUnit: number,
+): ApplyResult & { perItem: Array<{ itemId: string; add: number }> } {
+  if (targets.length === 0) return { portfolio, ok: false, reason: '找不到对应持仓条目', perItem: [] }
+  if (!Number.isFinite(totalAdd) || totalAdd <= 0) return { portfolio, ok: false, reason: '份额无效', perItem: [] }
+  if (!Number.isFinite(pricePerUnit) || pricePerUnit <= 0) {
+    return { portfolio, ok: false, reason: '再投资价格无效', perItem: [] }
+  }
+  const weights = targets.map((t) => Math.max(0, safeNum(t.shares)))
+  const totalShares = weights.reduce((s, w) => s + w, 0)
+  if (totalShares <= 0) return { portfolio, ok: false, reason: '该持仓份额为 0', perItem: [] }
+
+  let next = portfolio
+  const perItem: Array<{ itemId: string; add: number }> = []
+  let remaining = totalAdd
+  targets.forEach((target, index) => {
+    const add = index === targets.length - 1 ? remaining : (totalAdd * weights[index]) / totalShares
+    if (!(add > 0)) return
+    const res = reinvestShares(next, target.id, add, pricePerUnit)
+    if (res.ok) {
+      next = res.portfolio
+      perItem.push({ itemId: target.id, add })
+      remaining -= add
+    }
+  })
+  return { portfolio: next, ok: perItem.length > 0, perItem }
 }
 
 /* ------------------------------------------------------------------ *

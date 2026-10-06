@@ -8,10 +8,10 @@ import {
   afterTaxPerUnit,
   applyBonusShares,
   depositToCashItem,
-  findHolding,
+  findHoldings,
   loadDividendFile,
   patchRecord,
-  reinvestShares,
+  reinvestSharesAcross,
   removeRecord,
   roundMoney,
   saveDividendFile,
@@ -130,9 +130,10 @@ export function useDividends(
   const applyCash = useCallback(
     (record: DividendRecord, target: FundingSource): ApplyOutcome => {
       if (record.applied) return { ok: false, reason: '这笔已经入账过了' }
-      const holding = findHolding(portfolio, record)
-      if (!holding) return { ok: false, reason: '找不到对应持仓（可能已被删除）' }
-      const shares = Number(holding.shares) || 0
+      const holdings = findHoldings(portfolio, record)
+      if (holdings.length === 0) return { ok: false, reason: '找不到对应持仓（可能已被删除）' }
+      // 同一只基金在多个平台持有 → 按合计份额算分红
+      const shares = holdings.reduce((sum, h) => sum + (Number(h.shares) || 0), 0)
       if (shares <= 0) return { ok: false, reason: '该持仓份额为 0' }
       const amount = shares * afterTaxPerUnit(record, tax)
       const cny = toCny(amount, record.currency, rates) ?? amount
@@ -149,17 +150,29 @@ export function useDividends(
   const applyReinvest = useCallback(
     (record: DividendRecord, price: number): ApplyOutcome => {
       if (record.applied) return { ok: false, reason: '这笔已经入账过了' }
-      const holding = findHolding(portfolio, record)
-      if (!holding) return { ok: false, reason: '找不到对应持仓（可能已被删除）' }
+      const holdings = findHoldings(portfolio, record)
+      if (holdings.length === 0) return { ok: false, reason: '找不到对应持仓（可能已被删除）' }
       if (!(price > 0)) return { ok: false, reason: '请填写再投资价格（除息日净值 / 收盘价）' }
-      const shares = Number(holding.shares) || 0
+      const shares = holdings.reduce((sum, h) => sum + (Number(h.shares) || 0), 0)
       const add = (shares * afterTaxPerUnit(record, tax)) / price
       if (!(add > 0)) return { ok: false, reason: '折算份额为 0，请检查份额与价格' }
-      const res = reinvestShares(portfolio, holding.id, add, price)
+      // 多个平台持有同一只基金 → 按份额比例分摊到每一条
+      const res = reinvestSharesAcross(
+        portfolio,
+        holdings.map((h) => ({ id: h.id, shares: Number(h.shares) || 0 })),
+        add,
+        price,
+      )
       if (!res.ok) return { ok: false, reason: res.reason }
       applyPortfolio(res.portfolio)
       setFile((prev) => patchRecord(prev, record.id, { applied: true, appliedAt: Date.now() }))
-      return { ok: true, message: `已增加 ${add.toFixed(4)} 份` }
+      return {
+        ok: true,
+        message:
+          res.perItem.length > 1
+            ? `已增加 ${add.toFixed(4)} 份（按份额分摊到 ${res.perItem.length} 条持仓）`
+            : `已增加 ${add.toFixed(4)} 份`,
+      }
     },
     [portfolio, tax.us, tax.hk, applyPortfolio],
   )
@@ -169,13 +182,28 @@ export function useDividends(
     (record: DividendRecord): ApplyOutcome => {
       if (!record.bonusRatio || record.bonusRatio <= 0) return { ok: false, reason: '这笔没有送转比例' }
       if (record.bonusApplied) return { ok: false, reason: '这笔送转已经应用过了' }
-      const holding = findHolding(portfolio, record)
-      if (!holding) return { ok: false, reason: '找不到对应持仓（可能已被删除）' }
-      const res = applyBonusShares(portfolio, holding.id, record.bonusRatio)
-      if (!res.ok) return { ok: false, reason: res.reason }
-      applyPortfolio(res.portfolio)
+      const holdings = findHoldings(portfolio, record)
+      if (holdings.length === 0) return { ok: false, reason: '找不到对应持仓（可能已被删除）' }
+      // 多个平台持有同一只基金 → 每一条都要按同一比例送转
+      let next = portfolio
+      let applied = 0
+      for (const h of holdings) {
+        const res = applyBonusShares(next, h.id, record.bonusRatio)
+        if (res.ok) {
+          next = res.portfolio
+          applied += 1
+        }
+      }
+      if (applied === 0) return { ok: false, reason: '送转应用失败（份额或比例异常）' }
+      applyPortfolio(next)
       setFile((prev) => patchRecord(prev, record.id, { bonusApplied: true }))
-      return { ok: true, message: `份额已按「10 送转 ${record.bonusRatio} 股」调整` }
+      return {
+        ok: true,
+        message:
+          applied > 1
+            ? `份额已按「10 送转 ${record.bonusRatio} 股」调整（${applied} 条持仓同步）`
+            : `份额已按「10 送转 ${record.bonusRatio} 股」调整`,
+      }
     },
     [portfolio, applyPortfolio],
   )

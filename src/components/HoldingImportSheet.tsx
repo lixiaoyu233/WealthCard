@@ -3,8 +3,9 @@ import { Check, ClipboardCopy, FileText, TriangleAlert, Upload } from 'lucide-re
 import Sheet from './Sheet'
 import {
   HOLDING_IMPORT_PROMPT,
-  findDuplicate,
+  findExistingHolding,
   parseHoldingText,
+  type ExistingHolding,
   type ImportParseResult,
   type ImportType,
   type ParsedHolding,
@@ -20,8 +21,8 @@ interface HoldingImportSheetProps {
   defaultType: ImportType
   /** 该类型要落到哪个分类 */
   targetCategory: (type: ImportType) => { id: string; name: string } | undefined
-  /** 已有持仓（同代码检测重复） */
-  existing: Array<{ code: string; market?: HoldingMarket }>
+  /** 已有持仓（同代码检测重复；带上 id/份额/成本才能「合并到已有」） */
+  existing: ExistingHolding[]
   /** 导入选中的行（已在组件里应用了就地修改） */
   onImport: (holdings: ParsedHolding[]) => void
   notify: (text: string, tone?: 'success' | 'error' | 'info') => void
@@ -32,6 +33,8 @@ interface HoldingImportSheetProps {
 }
 
 const MARKET_LABEL: Record<HoldingMarket, string> = { cn: '场外基金', ashare: 'A股', hk: '港股', us: '美股' }
+
+type DupAction = 'skip' | 'new' | 'merge'
 
 interface Override {
   code?: string
@@ -63,24 +66,39 @@ export default function HoldingImportSheet({
   const [excluded, setExcluded] = useState<Record<number, boolean>>({})
   const [overrides, setOverrides] = useState<Record<number, Override>>({})
   const [importDup, setImportDup] = useState(false)
+  /** 每个重复行单独的处理方式 */
+  const [dupAction, setDupAction] = useState<Record<number, DupAction>>({})
   /** 每行补全结果（代码/份额/成本 + 来源 + 候选） */
   const [enriched, setEnriched] = useState<Record<number, Enrichment>>({})
   const [enriching, setEnriching] = useState(false)
   const [showPrompt, setShowPrompt] = useState(false)
   const [copied, setCopied] = useState(false)
 
-  const dupOf = useMemo(() => {
-    const map = new Map<number, boolean>()
-    for (const h of result?.holdings ?? []) map.set(h.line, findDuplicate(h, existing))
+  /** 这一行最终用的代码：解析出来的，或补全得到的（重复判定必须用后者，否则永远判不出重复） */
+  const codeOf = (h: ParsedHolding) => (h.code || enriched[h.line]?.code || '').trim()
+
+  /** 与已有持仓重复的行 → 命中哪一条（用于「合并到已有」） */
+  const dupEntryOf = useMemo(() => {
+    const map = new Map<number, ExistingHolding>()
+    for (const h of result?.holdings ?? []) {
+      const hit = findExistingHolding(h, existing, codeOf(h))
+      if (hit) map.set(h.line, hit)
+    }
     return map
-  }, [result, existing])
+    // codeOf 依赖 enriched，所以这里要跟着重算
+  }, [result, existing, enriched])
 
   const rows = result?.holdings ?? []
   const isSelected = (h: ParsedHolding) => {
     if (excluded[h.line] !== undefined) return !excluded[h.line]
-    // 默认：选中的都导入；重复的默认不导入
-    return importDup ? true : !dupOf.get(h.line)
+    const dup = dupEntryOf.get(h.line)
+    if (!dup) return true
+    // 重复行：默认跳过；每行可以单独选「新建一条 / 合并到已有」，也可用右上开关一次性全选为「新建」
+    return actionOf(h) !== 'skip'
   }
+
+  /** 重复行的处理方式（默认跳过；开关打开则默认"新建一条"） */
+  const actionOf = (h: ParsedHolding): DupAction => dupAction[h.line] ?? (importDup ? 'new' : 'skip')
   const selectedRows = rows.filter(isSelected)
 
   const copyPrompt = async () => {
@@ -160,6 +178,8 @@ export default function HoldingImportSheet({
           return null
         }
         const derivedShares = e?.shares ?? 0
+        const mergeTarget = dupEntryOf.get(h.line)
+        const mergeInto = mergeTarget && actionOf(h) === 'merge' ? mergeTarget.id : undefined
         if (derivedShares > 0) {
           out.push({
             ...h,
@@ -168,6 +188,10 @@ export default function HoldingImportSheet({
             amount,
             shares: derivedShares,
             costNav: e?.costNav,
+            mergeInto,
+            // ⚠️ 必须把补全到的「当前净值」带上：否则估值只能退回成本，
+            // 市值会显示成 份额×成本（如 10.00），盈亏恒为 0
+            price: h.price ?? e?.nav,
             sources: {
               code: e?.sources.code ?? 'none',
               shares: e?.sources.shares ?? 'none',
@@ -204,7 +228,16 @@ export default function HoldingImportSheet({
         notify(`第 ${h.line} 行：成本必须是非负数`, 'error')
         return null
       }
-      out.push({ ...h, code: finalCode, shares, costNav: cost, sources: e?.sources ?? h.sources })
+      const mergeTarget = dupEntryOf.get(h.line)
+      out.push({
+        ...h,
+        code: finalCode,
+        shares,
+        costNav: cost,
+        price: h.price ?? e?.nav ?? h.price,
+        mergeInto: mergeTarget && actionOf(h) === 'merge' ? mergeTarget.id : undefined,
+        sources: e?.sources ?? h.sources,
+      })
     }
     return out
   }
@@ -362,21 +395,26 @@ export default function HoldingImportSheet({
               <p className="text-[12px] text-ink3">
                 <span className="font-medium text-ink2">第 3 步</span>：核对后导入
               </p>
-              <label className="flex items-center gap-1.5 text-[11.5px] text-ink4">
-                <input
-                  type="checkbox"
-                  data-testid="holding-import-allow-dup"
-                  checked={importDup}
-                  onChange={(e) => setImportDup(e.target.checked)}
-                  className="h-3.5 w-3.5 accent-brand"
-                />
-                已存在的也导入
-              </label>
+              {dupEntryOf.size > 0 ? (
+                <label className="flex items-center gap-1.5 text-[11.5px] text-ink4">
+                  <input
+                    type="checkbox"
+                    data-testid="holding-import-allow-dup"
+                    checked={importDup}
+                    onChange={(e) => {
+                      setImportDup(e.target.checked)
+                      setDupAction({}) // 一键统一，清掉逐行的单独选择
+                    }}
+                    className="h-3.5 w-3.5 accent-brand"
+                  />
+                  已存在的也新建（{dupEntryOf.size} 条）
+                </label>
+              ) : null}
             </div>
             <ul className="mt-2 space-y-2">
               {rows.map((h) => {
                 const ov = overrides[h.line] ?? {}
-                const dup = dupOf.get(h.line)
+                const dup = dupEntryOf.get(h.line)
                 const target = targetCategory(h.type)
                 return (
                   <li
@@ -401,6 +439,37 @@ export default function HoldingImportSheet({
                               已存在
                             </span>
                           ) : null}
+                        </p>
+                        {dup ? (
+                          <div className="mt-1 flex items-center gap-1">
+                            {(
+                              [
+                                ['skip', '跳过'],
+                                ['new', '新建一条'],
+                                ['merge', '合并到已有'],
+                              ] as Array<[DupAction, string]>
+                            ).map(([value, label]) => (
+                              <button
+                                key={value}
+                                type="button"
+                                data-testid={`holding-import-dup-${value}-${h.line}`}
+                                onClick={() => setDupAction((prev) => ({ ...prev, [h.line]: value }))}
+                                className={`rounded-lg border px-2 py-0.5 text-[11px] transition ${
+                                  actionOf(h) === value
+                                    ? 'border-line-strong bg-s3 text-ink1'
+                                    : 'border-line bg-s2 text-ink4 hover:bg-s3'
+                                }`}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                            <span className="ml-1 text-[10.5px] text-ink4">
+                              已有 {dupEntryOf.get(h.line)?.name ?? dupEntryOf.get(h.line)?.code} ·{' '}
+                              {dupEntryOf.get(h.line)?.shares ?? 0} 份
+                            </span>
+                          </div>
+                        ) : null}
+                        <p className="hidden">
                           <span className="text-[11px] text-ink4">→ {target?.name ?? '缺分类'}</span>
                         </p>
                         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
@@ -448,30 +517,36 @@ export default function HoldingImportSheet({
                         {/* 自动补全的结果与来源 */}
                         {enriched[h.line] ? (
                           <div className="mt-1 space-y-0.5" data-testid={`holding-import-enriched-${h.line}`}>
-                            {enriched[h.line].code && !h.code ? (
+                            {/* 代码：自动选中的显示来源；不够像的只给候选让用户选（不自动采用） */}
+                            {!h.code &&
+                            enriched[h.line].candidates &&
+                            enriched[h.line].candidates!.length > 0 ? (
                               <p className="flex flex-wrap items-center gap-1 text-[11px] text-ink4">
-                                <span>
-                                  代码{' '}
-                                  <span className="tabular-nums text-ink2">{enriched[h.line].code}</span> · 按名称搜到
-                                  {enriched[h.line].officialName ? `（${enriched[h.line].officialName}）` : ''}
-                                </span>
-                                {enriched[h.line].candidates && enriched[h.line].candidates!.length > 1 ? (
-                                  <select
-                                    data-testid={`holding-import-candidate-${h.line}`}
-                                    className="rounded border border-line bg-s2 px-1 py-0.5 text-[11px]"
-                                    value={enriched[h.line].code}
-                                    onChange={(ev) => {
-                                      const picked = enriched[h.line].candidates?.find((c) => c.code === ev.target.value)
-                                      if (picked) void chooseCandidate(h, picked)
-                                    }}
-                                  >
-                                    {enriched[h.line].candidates!.map((c) => (
-                                      <option key={c.code} value={c.code}>
-                                        {c.name}
-                                      </option>
-                                    ))}
-                                  </select>
-                                ) : null}
+                                {enriched[h.line].code ? (
+                                  <span>
+                                    代码{' '}
+                                    <span className="tabular-nums text-ink2">{enriched[h.line].code}</span> · 按名称搜到
+                                    {enriched[h.line].officialName ? `（${enriched[h.line].officialName}）` : ''}
+                                  </span>
+                                ) : (
+                                  <span>候选里没有足够接近的名字，请自己选一个：</span>
+                                )}
+                                <select
+                                  data-testid={`holding-import-candidate-${h.line}`}
+                                  className="max-w-[220px] rounded border border-line bg-s2 px-1 py-0.5 text-[11px]"
+                                  value={enriched[h.line].code ?? ''}
+                                  onChange={(ev) => {
+                                    const picked = enriched[h.line].candidates?.find((c) => c.code === ev.target.value)
+                                    if (picked) void chooseCandidate(h, picked)
+                                  }}
+                                >
+                                  <option value="">请选择</option>
+                                  {enriched[h.line].candidates!.map((c) => (
+                                    <option key={c.code} value={c.code}>
+                                      {c.code} {c.name}
+                                    </option>
+                                  ))}
+                                </select>
                               </p>
                             ) : null}
                             {enriched[h.line].shares && !(h.shares > 0) ? (

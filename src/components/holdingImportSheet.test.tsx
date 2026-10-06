@@ -12,7 +12,7 @@ const TEXT = [
 
 const renderSheet = (
   opts: {
-    existing?: Array<{ code: string; market?: 'cn' | 'ashare' | 'hk' | 'us' }>
+    existing?: Array<{ id: string; code: string; market?: 'cn' | 'ashare' | 'hk' | 'us'; shares?: number; costNav?: number }>
     noCategory?: boolean
     /** 打开自动补全（默认关，避免测试联网） */
     autoEnrich?: boolean
@@ -95,7 +95,7 @@ describe('批量导入弹窗', () => {
   })
 
   it('已存在的同代码默认不勾选，可手动打开「已存在的也导入」', () => {
-    const { onImport } = renderSheet({ existing: [{ code: '600519', market: 'ashare' }] })
+    const { onImport } = renderSheet({ existing: [{ id: 'e1', code: '600519', market: 'ashare' }] })
     paste(TEXT)
     parse()
 
@@ -228,6 +228,8 @@ describe('自动补全（名称 → 代码 → 净值 → 份额）', () => {
       code: '016452',
       shares: 8.216,
       costNav: 1.2173,
+      // 关键：补全到的当前净值要一起带上，否则市值会退回成本、盈亏恒为 0
+      price: 1.25,
     })
     expect(onImport.mock.calls[0][0]).toHaveLength(1)
   })
@@ -238,7 +240,8 @@ describe('自动补全（名称 → 代码 → 净值 → 份额）', () => {
     parse()
     await screen.findByTestId('holding-import-enriched-1')
     const select = screen.getByTestId('holding-import-candidate-1') as HTMLSelectElement
-    expect(select.options).toHaveLength(2)
+    // 第一项是占位「请选择」（不够像时也用它让用户自己选）
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(['', '016452', '016453'])
   })
 
   it('补全失败（没有代码/份额）时不报错，仍可按金额导入', async () => {
@@ -256,5 +259,79 @@ describe('自动补全（名称 → 代码 → 净值 → 份额）', () => {
     fireEvent.click(screen.getByTestId('holding-import-submit'))
     expect(onImport.mock.calls[0][0][0]).toMatchObject({ mode: 'amount', amount: 10 })
     expect(notify).not.toHaveBeenCalledWith(expect.stringContaining('失败'), 'error')
+  })
+})
+
+
+describe('重复检测（修复：代码是补全出来的，以前永远判不出重复）', () => {
+  const enrichStub = (async () => ({
+    code: '016452',
+    officialName: '南方纳斯达克100指数发起(QDII)A',
+    nav: 2.3393,
+    navDate: '2026-09-29',
+    shares: 4.39,
+    costNav: 2.2778,
+    sources: { code: 'name-search', shares: 'derived-nav', cost: 'derived-profit' },
+    candidates: [],
+    notes: [],
+  })) as never
+
+  const existing = [
+    { id: 'e1', code: '016452', market: 'cn' as const, name: '南方纳斯达克100指数发起(QDII)A', shares: 10, costNav: 2 },
+  ]
+
+  const pasteOnce = () => {
+    paste('类型=基金 名称=南方纳斯达克100指数发起(QDII)A 金额=10.27 持仓收益=0.27')
+    parse()
+  }
+
+  it('补全拿到代码后，才判定「已存在」', async () => {
+    renderSheet({ autoEnrich: true, enrichImpl: enrichStub, existing })
+    pasteOnce()
+    expect(await screen.findByTestId('holding-import-dup-1')).toBeTruthy()
+    expect(screen.getByTestId('holding-import-dup-1').textContent).toContain('已存在')
+  })
+
+  it('默认跳过；选「新建一条」就能导入第二条', async () => {
+    const { onImport } = renderSheet({ autoEnrich: true, enrichImpl: enrichStub, existing })
+    pasteOnce()
+    await screen.findByTestId('holding-import-dup-1')
+    // 默认跳过 → 没东西可导
+    fireEvent.click(screen.getByTestId('holding-import-submit'))
+    expect(onImport).not.toHaveBeenCalled()
+    // 显式选「新建一条」
+    fireEvent.click(screen.getByTestId('holding-import-dup-new-1'))
+    fireEvent.click(screen.getByTestId('holding-import-submit'))
+    expect(onImport).toHaveBeenCalledTimes(1)
+    const row = onImport.mock.calls[0][0][0]
+    expect(row.mergeInto).toBeUndefined()
+    expect(row).toMatchObject({ mode: 'holding', code: '016452', shares: 4.39, costNav: 2.2778 })
+  })
+
+  it('右上开关：一键把所有重复行改成「新建一条」', async () => {
+    const { onImport } = renderSheet({ autoEnrich: true, enrichImpl: enrichStub, existing })
+    pasteOnce()
+    await screen.findByTestId('holding-import-dup-1')
+    const toggle = screen.getByTestId('holding-import-allow-dup')
+    fireEvent.click(toggle)
+    fireEvent.click(screen.getByTestId('holding-import-submit'))
+    expect(onImport).toHaveBeenCalledTimes(1)
+    expect(onImport.mock.calls[0][0]).toHaveLength(1)
+  })
+
+  it('选「合并到已有」→ 带上 mergeInto（份额相加 + 成本加权）', async () => {
+    const { onImport } = renderSheet({ autoEnrich: true, enrichImpl: enrichStub, existing })
+    pasteOnce()
+    await screen.findByTestId('holding-import-dup-1')
+    fireEvent.click(screen.getByTestId('holding-import-dup-merge-1'))
+    fireEvent.click(screen.getByTestId('holding-import-submit'))
+    expect(onImport).toHaveBeenCalledTimes(1)
+    expect(onImport.mock.calls[0][0][0]).toMatchObject({
+      mergeInto: 'e1',
+      mode: 'holding',
+      code: '016452',
+      shares: 4.39,
+      costNav: 2.2778,
+    })
   })
 })

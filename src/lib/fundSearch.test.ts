@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { makeFundItem } from '../hooks/usePortfolio'
+import { valuate } from './calc'
 import { parseHoldingText } from './holdingImport'
 import {
   enrichHolding,
@@ -7,7 +9,10 @@ import {
   parseFundSearch,
   pickFundCandidate,
   searchFund,
+  nameScore,
+  pickFundCandidateScored,
   searchKeyOf,
+  SIMILARITY_THRESHOLD,
 } from './fundSearch'
 
 const skipApi = process.env.ACW_SKIP_API === '1'
@@ -60,7 +65,8 @@ describe('候选挑选', () => {
   it('名称相似度：同一只基金的不同份额算相似，不同基金不算', () => {
     expect(nameSimilar('南方纳斯达克100指数发起(QDII)A', '南方纳斯达克100指数发起(QDII)C')).toBe(true)
     expect(nameSimilar('招商中证白酒指数A', '易方达蓝筹精选混合')).toBe(false)
-    expect(nameSimilar(undefined, '任意')).toBe(true)
+    // 没法比较时不算相似（调用方会同时保证两边非空）
+    expect(nameSimilar(undefined, '任意')).toBe(false)
   })
 })
 
@@ -140,4 +146,92 @@ describe.skipIf(skipApi)('真实接口：名称 → 代码 → 净值 → 份额
       `[补全] ${h.name} → ${e.code} 净值=${e.nav}(${e.navDate}) 份额≈${e.shares?.toFixed(2)} 成本≈${e.costNav?.toFixed(4)}`,
     )
   }, 30_000)
+})
+
+
+describe('名称清洗：AI 回复里的真实名字', () => {
+  it('去掉括号限定与结尾的份额/币种字样，只留主体名', () => {
+    expect(searchKeyOf('摩根标普500指数(QDII)人民币A')).toBe('摩根标普500指数')
+    expect(searchKeyOf('建信富时100指数（QDII）A人民币')).toBe('建信富时100指数')
+    expect(searchKeyOf('华安国际龙头(DAX)ETF联接A')).toBe('华安国际龙头ETF联接')
+    expect(searchKeyOf('南方标普红利低波50ETF联接A')).toBe('南方标普红利低波50ETF联接')
+    expect(searchKeyOf('博时中证红利低波动100ETF联接A')).toBe('博时中证红利低波动100ETF联接')
+  })
+})
+
+
+describe('推算出来的持仓，估值必须回得来（否则会出现 10 而不是 10.27）', () => {
+  it('份额×净值 = 金额，盈亏 = 持仓收益', () => {
+    const amount = 10.27
+    const profit = 0.27
+    const nav = 2.3393
+    const shares = amount / nav
+    const costNav = (amount - profit) / shares
+    const item = makeFundItem({
+      name: '南方纳斯达克100指数发起(QDII)A',
+      code: '016452',
+      market: 'cn',
+      shares,
+      costNav,
+      // 补全得到的当前净值 —— 导入时必须带上，否则估值退回成本、盈亏恒为 0
+      manualNav: nav,
+    })
+    const v = valuate(item, null)
+    expect(v.value).toBeCloseTo(amount, 2)
+    expect(v.profit).toBeCloseTo(profit, 2)
+    expect(v.cost).toBeCloseTo(amount - profit, 2)
+  })
+
+  it('如果没带净值（退回成本）就会复现那个 bug —— 用来说明为什么必须传', () => {
+    const amount = 10.27
+    const nav = 2.3393
+    const shares = amount / nav
+    const item = makeFundItem({ name: 'x', code: '016452', market: 'cn', shares, costNav: nav })
+    const v = valuate(item, null)
+    // 没给 manualNav/quote 时，估值取不到净值 → 只有成本，盈亏 0
+    expect(v.profit ?? 0).toBeCloseTo(0, 6)
+  })
+})
+
+
+describe('相似度门槛：宁可空着，也不要悄悄挑错', () => {
+  const holding = parseHoldingText('类型=基金 名称=华安国际龙头(DAX)ETF联接A 金额=9.88 持仓收益=-0.12').holdings[0]
+
+  it('候选都不够像（实测：官方名其实是「华安德国(DAX)联接(QDII)A」）→ 不自动填代码，只给候选', async () => {
+    const e = await enrichHolding(holding, {
+      online: false,
+      searchOverride: async () => [
+        { code: '020981', name: '华安国证机器人产业ETF发起式联接A' },
+        { code: '018806', name: '华安国企机遇混合A' },
+      ],
+    })
+    expect(e.code).toBeUndefined()
+    expect(e.candidates).toHaveLength(2)
+    expect(e.notes.some((n) => n.includes('足够接近') && n.includes('请从候选中选择'))).toBe(true)
+  })
+
+  it('多关键字兜底：第一轮没结果，第二轮（保留括号限定）命中', async () => {
+    const calls: string[] = []
+    const e = await enrichHolding(holding, {
+      online: false,
+      basicOverride: { nav: 1.2, navDate: '2026-10-05' },
+      searchOverride: async (key) => {
+        calls.push(key)
+        // 只有「华安国际龙头(DAX)ETF联接」这一轮能搜到
+        return key.includes('(DAX)') ? [{ code: '000614', name: '华安国际龙头(DAX)ETF联接A' }] : []
+      },
+    })
+    expect(calls.length).toBeGreaterThanOrEqual(2)
+    expect(e.code).toBe('000614')
+    expect(e.sources.code).toBe('name-search')
+  })
+
+  it('相似度打分：完全同名 1.0，前缀一致但后半不同会在门槛以下', () => {
+    expect(nameScore('南方纳斯达克100指数发起(QDII)A', '南方纳斯达克100指数发起(QDII)A')).toBe(1)
+    expect(nameScore('华安国际龙头(DAX)ETF联接A', '华安国证机器人产业ETF发起式联接A')).toBeLessThan(SIMILARITY_THRESHOLD)
+    expect(pickFundCandidateScored('南方纳斯达克100指数发起(QDII)A', [
+      { code: '016453', name: '南方纳斯达克100指数发起(QDII)C' },
+      { code: '016452', name: '南方纳斯达克100指数发起(QDII)A' },
+    ]).best?.code).toBe('016452')
+  })
 })
