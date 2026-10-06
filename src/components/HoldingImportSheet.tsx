@@ -420,7 +420,12 @@ export default function HoldingImportSheet({
                   <li
                     key={h.line}
                     data-testid={`holding-import-row-${h.line}`}
-                    className="rounded-2xl border border-line bg-s2 px-3.5 py-2.5"
+                    data-selected={isSelected(h)}
+                    className={`rounded-2xl border px-3.5 py-2.5 transition ${
+                      isSelected(h)
+                        ? 'border-line-strong bg-s3'
+                        : 'border-line bg-s2 opacity-55'
+                    }`}
                   >
                     <div className="flex items-start gap-2">
                       <input
@@ -428,7 +433,8 @@ export default function HoldingImportSheet({
                         data-testid={`holding-import-check-${h.line}`}
                         checked={isSelected(h)}
                         onChange={(e) => setExcluded((prev) => ({ ...prev, [h.line]: !e.target.checked }))}
-                        className="mt-1 h-4 w-4 shrink-0 accent-brand"
+                        aria-label={isSelected(h) ? '已选中，点击取消' : '未选中，点击选中'}
+                        className="mt-1 h-[18px] w-[18px] shrink-0 cursor-pointer accent-brand"
                       />
                       <div className="min-w-0 flex-1">
                         <p className="flex flex-wrap items-center gap-1.5 text-[12px] text-ink1">

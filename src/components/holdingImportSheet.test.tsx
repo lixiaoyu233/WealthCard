@@ -12,7 +12,14 @@ const TEXT = [
 
 const renderSheet = (
   opts: {
-    existing?: Array<{ id: string; code: string; market?: 'cn' | 'ashare' | 'hk' | 'us'; shares?: number; costNav?: number }>
+    existing?: Array<{
+      id: string
+      code: string
+      market?: 'cn' | 'ashare' | 'hk' | 'us'
+      name?: string
+      shares?: number
+      costNav?: number
+    }>
     noCategory?: boolean
     /** 打开自动补全（默认关，避免测试联网） */
     autoEnrich?: boolean
@@ -333,5 +340,53 @@ describe('重复检测（修复：代码是补全出来的，以前永远判不�
       shares: 4.39,
       costNav: 2.2778,
     })
+  })
+})
+
+
+describe('选中状态要一眼能看出来（复选框曾因为 appearance:none 变成空方块）', () => {
+  it('默认全选中的行 data-selected=true 且不带变淡样式', () => {
+    renderSheet()
+    paste('类型=基金 代码=161725 名称=招商中证白酒 份额=100 成本单价=1')
+    parse()
+    const row = screen.getByTestId('holding-import-row-1')
+    expect(row.getAttribute('data-selected')).toBe('true')
+    expect(row.className).not.toContain('opacity-55')
+  })
+
+  it('取消勾选后整行变淡，便于区分', () => {
+    renderSheet()
+    paste('类型=基金 代码=161725 名称=招商中证白酒 份额=100 成本单价=1')
+    parse()
+    fireEvent.click(screen.getByTestId('holding-import-check-1'))
+    const row = screen.getByTestId('holding-import-row-1')
+    expect(row.getAttribute('data-selected')).toBe('false')
+    expect(row.className).toContain('opacity-55')
+    // 再点回来
+    fireEvent.click(screen.getByTestId('holding-import-check-1'))
+    expect(screen.getByTestId('holding-import-row-1').getAttribute('data-selected')).toBe('true')
+  })
+
+  it('重复行默认未选中（整行变淡），选「新建一条」后变亮', async () => {
+    const enrichStub = (async () => ({
+      code: '016452',
+      shares: 4.39,
+      costNav: 2.2778,
+      nav: 2.3393,
+      sources: { code: 'name-search', shares: 'derived-nav', cost: 'derived-profit' },
+      candidates: [],
+      notes: [],
+    })) as never
+    renderSheet({
+      autoEnrich: true,
+      enrichImpl: enrichStub,
+      existing: [{ id: 'e1', code: '016452', market: 'cn', name: '已有持仓', shares: 10, costNav: 2 }],
+    })
+    paste('类型=基金 名称=南方纳斯达克100指数发起(QDII)A 金额=10.27 持仓收益=0.27')
+    parse()
+    await screen.findByTestId('holding-import-dup-1')
+    expect(screen.getByTestId('holding-import-row-1').getAttribute('data-selected')).toBe('false')
+    fireEvent.click(screen.getByTestId('holding-import-dup-new-1'))
+    expect(screen.getByTestId('holding-import-row-1').getAttribute('data-selected')).toBe('true')
   })
 })

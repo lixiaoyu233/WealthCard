@@ -166,11 +166,24 @@
     -moz-appearance: textfield;
   }
 
-  /* 统一两套主题下的原生控件外观 */
-  input,
+  /*
+   * 统一两套主题下的原生控件外观。
+   * ⚠️ 必须排除 checkbox / radio：appearance:none 会把原生勾选样式一起抹掉，
+   * 勾了和没勾长得一模一样（曾经导入弹窗的复选框就踩过这个坑）。
+   */
+  input:not([type='checkbox']):not([type='radio']),
   select {
     -webkit-appearance: none;
     appearance: none;
+  }
+
+  /* 复选框：保留原生勾选态，只用 accent-color 跟随品牌色，并把点击区放大到 20px */
+  input[type='checkbox'],
+  input[type='radio'] {
+    accent-color: var(--accent-gold);
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
   }
 
   select {
