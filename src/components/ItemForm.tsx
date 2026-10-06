@@ -561,6 +561,7 @@ export default function ItemForm({
             value={value}
             onChange={(e) => onChange(e.target.value)}
             inputMode="decimal"
+            data-testid={`item-field-${field}`}
             placeholder="0.00"
             className="field-input pr-16 text-[17px] font-medium tabular-nums"
           />
@@ -1018,8 +1019,13 @@ export default function ItemForm({
         </div>
       ) : null}
 
-      {/* 债券期限：国债分类、以及任何基金/ETF（如 30 年国债 ETF）都能选 */}
-      {isFundKind || /债|固收/.test(category.name) ? (
+      {/*
+        债券期限：国债/债券类分类、以及任何基金/ETF（如 30 年国债 ETF）都能选。
+        ⚠️ 必须排除负债分类 —— 默认分类就叫「负债」，只用 /债/ 会把负债也算进来。
+      */}
+      {!category.isLiability &&
+      !/(负债|债务|欠款|借款|贷款)/.test(category.name) &&
+      (isFundKind || /债|固收/.test(category.name)) ? (
         <div className="rounded-xl border border-line bg-s2 px-3.5 py-3" data-testid="bond-term-section">
           <div className="flex items-center justify-between">
             <span className="text-[12.5px] text-ink2">债券期限</span>
@@ -1193,7 +1199,7 @@ export default function ItemForm({
       {error ? <p className="text-[12px] tone-danger">{error}</p> : null}
 
       <div className="flex items-center gap-2.5 pt-0.5">
-        <button type="button" className="btn-primary flex-1" onClick={submit}>
+        <button type="button" data-testid="item-submit" className="btn-primary flex-1" onClick={submit}>
           {editing ? '保存修改' : '添加'}
         </button>
         {editing && onDelete ? (

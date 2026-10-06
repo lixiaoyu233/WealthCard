@@ -194,3 +194,39 @@ describe('负债卡片上的到期提醒', () => {
 
 // 让 lint 满意：这些是从设置里拿的默认值，用于后续扩展断言
 void createDefaultSettings
+
+
+describe('债券期限的选择器只出现在债券/基金场景', () => {
+  const bondCat: Category = { ...liability, id: 'cat_bond', name: '国债', isLiability: false }
+
+  it('负债分类不显示（默认分类就叫「负债」，曾经因为 /债/ 误显示）', () => {
+    renderForm({ category: liability })
+    expect(screen.queryByTestId('bond-term-section')).toBeNull()
+  })
+
+  it('国债分类显示', () => {
+    renderForm({ category: bondCat })
+    expect(screen.getByTestId('bond-term-section')).toBeTruthy()
+  })
+
+  it('基金分类显示（30 年国债 ETF 也要能标久期）', () => {
+    renderForm({ category: { ...assetCat, name: '基金', defaultKind: 'fund' } as Category })
+    expect(screen.getByTestId('bond-term-section')).toBeTruthy()
+  })
+
+  it('名字里带「债务/欠款/贷款」的自定义负债分类也不显示', () => {
+    renderForm({ category: { ...liability, name: '债务' } })
+    expect(screen.queryByTestId('bond-term-section')).toBeNull()
+    cleanup()
+    renderForm({ category: { ...liability, name: '消费贷款', isLiability: false } })
+    expect(screen.queryByTestId('bond-term-section')).toBeNull()
+  })
+
+  it('选了「长期」后提交，条目带上 bondTerm', () => {
+    const { onSubmit } = renderForm({ category: bondCat })
+    fireEvent.change(screen.getByTestId('item-field-amount'), { target: { value: '100000' } })
+    fireEvent.click(screen.getByTestId('bond-term-long'))
+    fireEvent.click(screen.getByTestId('item-submit'))
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ bondTerm: 'long' })
+  })
+})
