@@ -115,9 +115,10 @@ describe('内置策略', () => {
 
   it('永久组合与 60/40 的类别与比例符合需求', () => {
     const pm = BUILTIN_STRATEGIES.find((s) => s.id === 'permanent')!
+    // 用户口径：永久组合里的这一档改叫「国债」（长期/中期国债都并进来）
     expect(Object.fromEntries(pm.classes.map((c) => [c.name, c.target]))).toEqual({
       股票: 25,
-      长期国债: 25,
+      国债: 25,
       黄金: 25,
       现金: 25,
     })
@@ -199,11 +200,11 @@ describe('分类到策略类别的映射', () => {
   })
 
   it('自定义分类按名称关键词兜底', () => {
-    // 「数字货币」命中「货币」关键词 -> 现金
-    expect(defaultMappingFor(aw, cat('cat_x', '数字货币'))).toEqual([{ strategyClassId: 'cash', percent: 100 }])
-    // 完全没命中关键词时，兜底到目标占比最大的类别（全天候是长期国债 38%）
+    // 「数字货币」不再被当成现金（它没有对应桶）→ 明确算「未归类」
+    expect(defaultMappingFor(aw, cat('cat_x', '数字货币'))).toEqual([])
+    // 完全没命中关键词时也不再并进占比最大的类别 —— 交给「未归类」明确展示
     const art = cat('cat_art', '收藏与另类')
-    expect(defaultMappingFor(aw, art)).toEqual([{ strategyClassId: 'bond-long', percent: 100 }])
+    expect(defaultMappingFor(aw, art)).toEqual([])
 
     const bondCat = cat('cat_y', '企业债')
     expect(defaultMappingFor(aw, bondCat)).toEqual([{ strategyClassId: 'bond-long', percent: 100 }])
@@ -253,9 +254,9 @@ describe('分类市值分配到策略类别', () => {
       unmappedPolicy: 'auto',
     })
     expect(alloc.byClass.stock).toBeCloseTo(101000, 6) // 10 万股票 + 1000 股票型基金
-    // 债券型基金有「长期国债 / 中期国债」两个候选，取目标占比更大的长期国债（38% > 14.25%）
-    expect(alloc.byClass['bond-long']).toBeCloseTo(1000, 6)
-    expect(alloc.byClass['bond-mid']).toBeCloseTo(0, 6)
+    // 债券型基金没有期限信息 → 默认落「中期国债」（要长债就在条目上把期限选成「长期」）
+    expect(alloc.byClass['bond-mid']).toBeCloseTo(1000, 6)
+    expect(alloc.byClass['bond-long']).toBeCloseTo(0, 6)
     // 现金类照旧全额进现金
     expect(alloc.byClass.cash).toBeCloseTo(300000, 6)
     expect(alloc.byClass.gold).toBeCloseTo(10000, 6)
@@ -264,7 +265,8 @@ describe('分类市值分配到策略类别', () => {
   })
 
   it('负债默认不进分母，开启后从分母扣除', () => {
-    const p = makePortfolio({ cash: [amount('a1', '活期', 500000)], debt: [amount('d1', '房贷', 100000)] })
+    // 注意用非房贷的负债：带「房」的负债与自住房成对排除（见「对照表」用例）
+    const p = makePortfolio({ cash: [amount('a1', '活期', 500000)], debt: [amount('d1', '信用贷', 100000)] })
     const aw = BUILTIN_STRATEGIES.find((s) => s.id === 'all-weather')!
     const off = computeAllocations({ portfolio: p, strategy: aw, includeLiabilities: false, unmappedPolicy: 'auto' })
     expect(off.total).toBeCloseTo(500000, 6)
@@ -417,8 +419,8 @@ describe('再平衡计算', () => {
     const r = computeRebalance(p, aw, { threshold: 5, includeLiabilities: false, unmappedPolicy: 'auto' })
     const sum = r.classes.reduce((s, c) => s + c.actualWeight, 0)
     expect(sum).toBeCloseTo(1, 6)
-    // 负债默认不计入分母
-    expect(r.totalForAllocation).toBeCloseTo(summarize(p).totalAssets, 4)
+    // 带「房」的自住房不纳入配置 → 分母 = 总资产 − 自住房（235 万）
+    expect(r.totalForAllocation).toBeCloseTo(summarize(p).totalAssets - 2350000, 4)
     const line = statusLine(r)
     expect(line).toMatch(/^当前策略：全天候策略 · 偏离度 \d+\.\d% · /)
     expect(shortStrategyName('全天候策略（桥水）')).toBe('全天候策略')
@@ -486,5 +488,222 @@ describe('策略设置持久化结构', () => {
     })
     expect(viaSettings.totalDeviationPoints).toBeCloseTo(manual.totalDeviationPoints, 6)
     expect(viaSettings.plannedSell).toBeCloseTo(manual.plannedSell, 6)
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * 资产 → 三策略桶（对照表）
+ * 用户确认的口径：带「房」的不纳入；保险/年金不纳入；负债按负现金；
+ * 分期划扣的负债条目不纳入；国债按条目上的期限分档；黄金/现金在 60/40 并入债券。
+ * ------------------------------------------------------------------ */
+describe('资产 → 三策略桶（对照表）', () => {
+  const cat = (id: string, name: string, items: unknown[], extra: Record<string, unknown> = {}) =>
+    ({ id, name, subtitle: '', icon: 'x', color: '#888', items: items as never, ...extra }) as never
+
+  /** 活期 10 万 + 自住房 200 万 + 股票 20 万 + 基金 10 万（股票型/纯债型各 10 万×1 份） + 国债 10 万 + 黄金 3 万 + 负债 8 万 + 保险 15 万 + 分期 2 万 */
+  function matrixPortfolio(): Portfolio {
+    return {
+      version: 2,
+      history: [],
+      categories: [
+        cat('cat_cash', '现金与固定资产', [amount('a1', '招行活期', 100000), amount('a2', '自住房', 2000000)]),
+        cat('cat_stock', '股票', [amount('s1', '沪深300ETF', 200000)]),
+        cat('cat_fund', '基金', [
+          fundItem('f1', '161725', '招商中证白酒指数A', 1000, 1, 100),
+          fundItem('f2', '000001', '易方达纯债债券A', 1000, 1, 100),
+        ]),
+        cat('cat_bond', '国债', [
+          { ...amount('b1', '10年期国债', 40000), bondTerm: 'long' },
+          { ...amount('b2', '1年期国债', 60000), bondTerm: 'mid' },
+        ]),
+        cat('cat_gold', '黄金', [{ id: 'g1', kind: 'gold', name: '工行积存金', grams: 30, pricePerGram: 1000 }]),
+        cat(
+          'cat_debt',
+          '负债',
+          [amount('d1', '信用卡', 80000), amount('d3', '自住房房贷', 500000), amount('d2', '分期中的手机贷', 20000)],
+          { isLiability: true },
+        ),
+        cat('cat_insurance', '保险与年金', [amount('i1', '重疾险现金价值', 150000)]),
+      ],
+    }
+  }
+
+  const alloc = (strategyId: string, extra: Record<string, unknown> = {}) => {
+    const strategy = BUILTIN_STRATEGIES.find((s) => s.id === strategyId)!
+    return computeAllocations({
+      portfolio: matrixPortfolio(),
+      strategy,
+      includeLiabilities: true,
+      unmappedPolicy: 'auto',
+      excludedItemIds: ['d2'],
+      ...extra,
+    } as never)
+  }
+
+  const sumBuckets = (byClass: Record<string, number>) => Object.values(byClass).reduce((s, v) => s + v, 0)
+
+  it('全天候：股票 30 万 / 长债 4 万 / 中债 6 万 / 黄金 3 万 / 现金 2 万（活期 10 万 − 负债 8 万）', () => {
+    const a = alloc('all-weather')
+    expect(a.byClass.stock).toBeCloseTo(300000, 6)
+    expect(a.byClass['bond-long']).toBeCloseTo(40000, 6)
+    // 中债：1 年期国债 6 万 + 纯债基金 10 万（无期限信息 → 默认中期）
+    expect(a.byClass['bond-mid']).toBeCloseTo(160000, 6)
+    expect(a.byClass.gold).toBeCloseTo(30000, 6)
+    expect(a.byClass.cash).toBeCloseTo(20000, 6)
+    expect(a.byClass.commodity).toBeCloseTo(0, 6)
+    expect(a.total).toBeCloseTo(550000, 6)
+    expect(a.liabilityDeducted).toBeCloseTo(80000, 6)
+  })
+
+  it('永久组合：长期/中期国债都并进「国债」桶', () => {
+    const a = alloc('permanent')
+    expect(a.byClass.stock).toBeCloseTo(300000, 6)
+    expect(a.byClass['bond-long']).toBeCloseTo(200000, 6)
+    expect(a.byClass.gold).toBeCloseTo(30000, 6)
+    expect(a.byClass.cash).toBeCloseTo(20000, 6)
+    expect(a.total).toBeCloseTo(550000, 6)
+  })
+
+  it('经典 60/40：黄金与现金并入债券', () => {
+    const a = alloc('classic-60-40')
+    expect(a.byClass.stock).toBeCloseTo(300000, 6)
+    expect(a.byClass.bond).toBeCloseTo(250000, 6)
+    expect(a.total).toBeCloseTo(550000, 6)
+  })
+
+  it('带「房」的资产与房贷成对排除；保险年金、分期划扣同样不纳入', () => {
+    const a = alloc('all-weather')
+    expect(sumBuckets(a.byClass)).toBeCloseTo(a.total, 6)
+    // 自住房 200 万 + 房贷 50 万（与自住房成对排除）+ 保险 15 万 + 分期 2 万
+    expect(a.excludedValue).toBeCloseTo(2000000 + 500000 + 150000 + 20000, 6)
+    expect(a.unclassifiedItemCount).toBe(0)
+  })
+
+  it('负债不计入时（includeLiabilities=false）：现金桶不扣负债', () => {
+    const a = alloc('all-weather', { includeLiabilities: false })
+    expect(a.byClass.cash).toBeCloseTo(100000, 6)
+    expect(a.liabilityDeducted).toBe(0)
+  })
+
+  it('自行分割：某 ETF 手动 40% 股 / 60% 债', () => {
+    const portfolio: Portfolio = {
+      version: 2,
+      history: [],
+      categories: [
+        cat('cat_stock', '股票', [
+          {
+            id: 'e1',
+            kind: 'fund',
+            name: '某ETF',
+            code: '510300',
+            market: 'ashare',
+            shares: 1000,
+            costNav: 100,
+            quote: { code: '510300', name: '某ETF', publishedNav: 100, fetchedAt: Date.now(), source: 'test' },
+          },
+        ]),
+      ],
+    }
+    const strategy = BUILTIN_STRATEGIES.find((s) => s.id === 'all-weather')!
+    const a = computeAllocations({
+      portfolio,
+      strategy,
+      includeLiabilities: true,
+      unmappedPolicy: 'auto',
+      itemMapping: { 'ashare:510300': { mix: { equity: 0.4, bond: 0.6, money: 0, gold: 0, commodity: 0, other: 0 } } },
+    })
+    expect(a.byClass.stock).toBeCloseTo(40000, 6)
+    expect(a.byClass['bond-mid']).toBeCloseTo(60000, 6)
+  })
+
+  it('未归类：明确暴露，不静默并进别的桶；ignore 时不计入分母', () => {
+    const portfolio: Portfolio = {
+      version: 2,
+      history: [],
+      categories: [cat('cat_other', '数字货币', [amount('c1', 'BTC', 10000)])],
+    }
+    const strategy = BUILTIN_STRATEGIES.find((s) => s.id === 'all-weather')!
+    const auto = computeAllocations({ portfolio, strategy, includeLiabilities: false, unmappedPolicy: 'auto' })
+    expect(auto.unclassifiedValue).toBeCloseTo(10000, 6)
+    expect(auto.total).toBeCloseTo(10000, 6)
+    expect(sumBuckets(auto.byClass)).toBeCloseTo(0, 6)
+
+    const ignore = computeAllocations({ portfolio, strategy, includeLiabilities: false, unmappedPolicy: 'ignore' })
+    expect(ignore.total).toBeCloseTo(0, 6)
+    expect(ignore.unclassifiedValue).toBeCloseTo(10000, 6)
+  })
+
+  it('穿透占比（autoMixOf）优先于名称与分类映射', () => {
+    const portfolio: Portfolio = {
+      version: 2,
+      history: [],
+      categories: [cat('cat_fund', '基金', [fundItem('f1', '000171', '易方达裕丰回报债券', 1000, 1, 100)])],
+    }
+    const strategy = BUILTIN_STRATEGIES.find((s) => s.id === 'all-weather')!
+    const a = computeAllocations({
+      portfolio,
+      strategy,
+      includeLiabilities: false,
+      unmappedPolicy: 'auto',
+      autoMixOf: () => ({ mix: { equity: 0.19, bond: 0.81, money: 0, gold: 0, commodity: 0, other: 0 }, origin: 'api' }),
+    })
+    expect(a.byClass['bond-mid']).toBeCloseTo(81000, 6)
+    expect(a.byClass.stock).toBeCloseTo(19000, 6)
+  })
+})
+
+
+/* ------------------------------------------------------------------ *
+ * 债券期限（长期 / 中期）
+ * ------------------------------------------------------------------ */
+describe('债券期限（长期 / 中期）', () => {
+  const withFund = (name: string, extra: Record<string, unknown>) =>
+    ({
+      version: 2,
+      history: [],
+      categories: [
+        {
+          id: 'cat_fund',
+          name: '基金',
+          subtitle: '',
+          icon: 'x',
+          color: '#888',
+          items: [{ ...fundItem('e1', '511090', name, 1000, 1, 100), ...extra }],
+        },
+      ],
+    }) as unknown as Portfolio
+
+  const aw = BUILTIN_STRATEGIES.find((s) => s.id === 'all-weather')!
+
+  it('基金/ETF 也能带期限：标「长期」→ 落长期国债', () => {
+    const a = computeAllocations({
+      portfolio: withFund('30年国债ETF', { bondTerm: 'long' }),
+      strategy: aw,
+      includeLiabilities: false,
+      unmappedPolicy: 'auto',
+    })
+    expect(a.byClass['bond-long']).toBeCloseTo(100000, 6)
+    expect(a.byClass['bond-mid']).toBeCloseTo(0, 6)
+  })
+
+  it('名称里就有久期线索：30 年国债 ETF 不标期限也自动算长期', () => {
+    const a = computeAllocations({
+      portfolio: withFund('30年国债ETF', {}),
+      strategy: aw,
+      includeLiabilities: false,
+      unmappedPolicy: 'auto',
+    })
+    expect(a.byClass['bond-long']).toBeCloseTo(100000, 6)
+  })
+
+  it('没有任何期限线索时默认中期（更保守）', () => {
+    const a = computeAllocations({
+      portfolio: withFund('易方达纯债债券A', {}),
+      strategy: aw,
+      includeLiabilities: false,
+      unmappedPolicy: 'auto',
+    })
+    expect(a.byClass['bond-mid']).toBeCloseTo(100000, 6)
+    expect(a.byClass['bond-long']).toBeCloseTo(0, 6)
   })
 })

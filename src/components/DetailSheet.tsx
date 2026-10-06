@@ -43,6 +43,10 @@ interface DetailSheetProps {
   onEditCategory: (category: Category) => void
   /** 打开「批量导入持仓」（基金/股票分类才有） */
   onOpenImport?: () => void
+  /** 条目当前的策略映射来源文案（如「自动·穿透」），显示在条目行上 */
+  mappingLabelOf?: (item: AssetItem, category: Category) => string
+  /** 打开单笔资产的映射设置 */
+  onOpenMapping?: (item: AssetItem, category: Category) => void
   /** 定期划扣计划（按条目查） */
   plans?: InstallmentPlan[]
   /** 扣款账户候选（现金与固定资产，余额不限，可扣成负数） */
@@ -78,6 +82,8 @@ export default function DetailSheet({
   onMoveCategory,
   onRefresh,
   onOpenImport,
+  mappingLabelOf,
+  onOpenMapping,
   plans,
   depositTargets,
   onSavePlan,
@@ -228,6 +234,8 @@ export default function DetailSheet({
                     dueCount={dueCount}
                     onConfirmTerm={onConfirmTerm}
                     onSkipReminder={onSkipReminder}
+                    mappingLabel={mappingLabelOf?.(item, category)}
+                    onOpenMapping={onOpenMapping ? () => onOpenMapping(item, category) : undefined}
                     onEdit={() => setMode({ view: 'form', initial: item })}
                     onDelete={() => setPendingDelete({ type: 'item', item })}
                   />
@@ -336,6 +344,8 @@ function ItemRow({
   dueCount,
   onConfirmTerm,
   onSkipReminder,
+  mappingLabel,
+  onOpenMapping,
   onEdit,
   onDelete,
 }: {
@@ -345,6 +355,8 @@ function ItemRow({
   dueCount?: (plan: InstallmentPlan) => number
   onConfirmTerm?: (plan: InstallmentPlan) => void
   onSkipReminder?: (plan: InstallmentPlan) => void
+  mappingLabel?: string
+  onOpenMapping?: () => void
   onEdit: () => void
   onDelete: () => void
 }) {
@@ -455,6 +467,26 @@ function ItemRow({
               {plan.countFullAmount ? ' · 全额计入负债' : ' · 按每期计入负债'}
             </span>
           </div>
+        </div>
+      ) : null}
+
+      {/* 策略映射：这笔资产按什么算进投资策略 */}
+      {onOpenMapping ? (
+        <div className="flex items-center gap-2 border-t border-line px-3.5 py-2 text-[11px]">
+          <span className="text-ink4">策略映射</span>
+          {mappingLabel ? (
+            <span className="chip" data-testid={'item-mapping-label-' + item.id}>
+              {mappingLabel}
+            </span>
+          ) : null}
+          <button
+            type="button"
+            data-testid={'item-mapping-' + item.id}
+            className="ml-auto text-ink3 underline-offset-2 hover:underline"
+            onClick={onOpenMapping}
+          >
+            设置
+          </button>
         </div>
       ) : null}
     </li>

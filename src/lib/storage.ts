@@ -120,7 +120,10 @@ function normalizeItem(raw: unknown): Portfolio['categories'][number]['items'][n
      * 会把 SPY / QQQ 这类美股字母代码清成空字符串，导致持仓永远拿不到行情。
      */
     const rawCode = typeof o.code === 'string' ? o.code.trim() : ''
-    const rawMarket = o.market === 'us' || o.market === 'hk' || o.market === 'cn' ? o.market : undefined
+    // ⚠️ 白名单必须包含 ashare：漏掉它会让 A股/场内持仓在重新加载后退化成场外基金
+    const isMarket = (v: unknown): v is 'cn' | 'ashare' | 'us' | 'hk' =>
+      v === 'us' || v === 'hk' || v === 'cn' || v === 'ashare'
+    const rawMarket = isMarket(o.market) ? o.market : undefined
     const code =
       rawMarket === 'us'
         ? rawCode.toUpperCase().replace(/[^A-Z.\-]/g, '').slice(0, 6)
@@ -131,8 +134,18 @@ function normalizeItem(raw: unknown): Portfolio['categories'][number]['items'][n
       name,
       note: typeof o.note === 'string' ? o.note : undefined,
       code,
-      market:
-        o.market === 'us' || o.market === 'hk' || o.market === 'cn' ? o.market : undefined,
+      market: rawMarket,
+      // 人工标记的资产类型（旧字段，仍作为「手动占比」的兼容来源）与债券期限都要留住
+      assetClass:
+        o.assetClass === 'equity' ||
+        o.assetClass === 'bond' ||
+        o.assetClass === 'money' ||
+        o.assetClass === 'commodity' ||
+        o.assetClass === 'mixed' ||
+        o.assetClass === 'unknown'
+          ? o.assetClass
+          : undefined,
+      bondTerm: o.bondTerm === 'long' || o.bondTerm === 'mid' ? o.bondTerm : undefined,
       shares: safeNum(o.shares),
       costNav: safeNum(o.costNav),
       manualNav:
@@ -161,6 +174,8 @@ function normalizeItem(raw: unknown): Portfolio['categories'][number]['items'][n
     ? o.currency
     : undefined
 
+  const bondTerm = o.bondTerm === 'long' || o.bondTerm === 'mid' ? o.bondTerm : undefined
+
   if (kind === 'gold') {
     return {
       id,
@@ -170,6 +185,7 @@ function normalizeItem(raw: unknown): Portfolio['categories'][number]['items'][n
       grams: safeNum(o.grams),
       pricePerGram: safeNum(o.pricePerGram),
       currency,
+      bondTerm,
     }
   }
 
@@ -180,6 +196,7 @@ function normalizeItem(raw: unknown): Portfolio['categories'][number]['items'][n
     note: typeof o.note === 'string' ? o.note : undefined,
     amount: safeNum(o.amount),
     currency,
+    bondTerm,
   }
 }
 

@@ -91,9 +91,13 @@ describe.skipIf(!online)('真实接口：天天基金估值同步', () => {
     const url = buildPush2Url(['510300'])
     const res = await fetchWithRetry(url)
     const text = await res.text()
+    // 2026-10 实测：push2 有时不再用 cb(...) 包裹，直接返回裸 JSON。
+    // 两条路都要能解析（生产里 jsonp() 走 <script>，裸 JSON 会被浏览器当语法错误——
+    // 这也是「CORS fetch 优先、JSONP 只兜底」的原因）。
     const match = text.match(/^[^(]*\((.*)\);?\s*$/s)
-    expect(match, `回调包裹格式异常：${text.slice(0, 120)}`).not.toBeNull()
-    const quotes = parsePush2Batch(JSON.parse(match![1]))
+    const payload = match ? JSON.parse(match[1]) : JSON.parse(text)
+    console.log(`[push2] 返回形态：${match ? 'cb() 包裹' : '裸 JSON'}`)
+    const quotes = parsePush2Batch(payload)
     expect(quotes.length).toBeGreaterThan(0)
     expect(quotes[0].code).toBe('510300')
     expect(quotes[0].estimatedNav).toBeGreaterThan(0)

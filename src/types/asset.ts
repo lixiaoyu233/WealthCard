@@ -25,6 +25,13 @@ export interface AmountItem extends BaseItem {
 export interface BaseItem {
   id: string
   /**
+   * 债券期限（长期 / 中期）。
+   * 全天候策略把债券拆成「长期国债 / 中期国债」两档，靠这个字段决定落哪一档；
+   * 没选时默认按中期（要长债就显式选「长期」）。基金/ETF 也能带：
+   * 例如 511090（30 年国债 ETF）应标成长期，否则穿透出来的债券会落进中期。
+   */
+  bondTerm?: 'long' | 'mid'
+  /**
    * 所属分类由 Portfolio.categories[].id 承载，条目内部不再冗余存储，
    * 便于分类改名 / 排序时不产生数据不一致。
    */

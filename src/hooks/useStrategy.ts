@@ -1,6 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Portfolio } from '../types/asset'
-import type { CategoryMapping, MappingEntry, Strategy, StrategySettings, StrategyId } from '../types/strategy'
+import type { AssetItem } from '../types/asset'
+import type {
+  AssetMix,
+  CategoryMapping,
+  ItemMapping,
+  ItemMappingRule,
+  MappingEntry,
+  Strategy,
+  StrategySettings,
+  StrategyId,
+} from '../types/strategy'
+import { normalizeItemMapping } from '../lib/itemMapping'
 import { cloneStrategy, createCustomStrategy } from '../lib/strategies'
 import {
   createDefaultSettings,
@@ -87,6 +98,14 @@ export function normalizeSettings(raw: unknown): StrategySettings {
     ? raw.customStrategies.map(normalizeStrategy).filter((s): s is Strategy => s !== null)
     : []
 
+  const itemMappings: Record<string, ItemMapping> = {}
+  if (isRecord(raw.itemMappings)) {
+    for (const [strategyId, mapping] of Object.entries(raw.itemMappings)) {
+      const normalized = normalizeItemMapping(mapping)
+      if (Object.keys(normalized).length > 0) itemMappings[strategyId] = normalized
+    }
+  }
+
   const mappings: Record<string, CategoryMapping> = {}
   if (isRecord(raw.mappings)) {
     for (const [strategyId, mapping] of Object.entries(raw.mappings)) {
@@ -101,6 +120,7 @@ export function normalizeSettings(raw: unknown): StrategySettings {
     activeStrategyId: typeof raw.activeStrategyId === 'string' ? raw.activeStrategyId : base.activeStrategyId,
     customStrategies,
     mappings,
+    itemMappings,
     threshold: Number.isFinite(threshold) ? Math.min(50, Math.max(0, threshold)) : base.threshold,
     includeLiabilities: raw.includeLiabilities === true,
     unmappedPolicy: raw.unmappedPolicy === 'ignore' ? 'ignore' : 'auto',
@@ -130,7 +150,15 @@ function persist(settings: StrategySettings): string | null {
  * Hook
  * ------------------------------------------------------------------ */
 
-export function useStrategy(portfolio: Portfolio) {
+export interface StrategyComputeOptions {
+  /** 条目级自动占比（穿透） */
+  autoMixOf?: (item: AssetItem) => { mix: AssetMix; origin: 'api' | 'name' } | undefined
+  /** 排除在配置之外的条目（如分期划扣维护的负债条目） */
+  excludedItemIds?: string[]
+}
+
+export function useStrategy(portfolio: Portfolio, options: StrategyComputeOptions = {}) {
+  const { autoMixOf, excludedItemIds } = options
   const [settings, setSettings] = useState<StrategySettings>(() => loadSettings())
   const [storageError, setStorageError] = useState<string | null>(null)
 
@@ -163,7 +191,29 @@ export function useStrategy(portfolio: Portfolio) {
     return out
   }, [strategy, portfolio])
 
-  const result = useMemo(() => rebalanceWithSettings(portfolio, settings), [portfolio, settings])
+  /** 当前策略下用户设过的「条目级」映射 */
+  const itemMapping = useMemo(() => settings.itemMappings?.[strategy.id] ?? {}, [settings.itemMappings, strategy.id])
+
+  const result = useMemo(
+    () =>
+      rebalanceWithSettings(portfolio, settings, undefined, {
+        itemMapping,
+        autoMixOf,
+        excludedItemIds,
+      }),
+    [portfolio, settings, itemMapping, autoMixOf, excludedItemIds],
+  )
+
+  /** 写入/清除某个条目的映射规则（rule 传 undefined 表示恢复自动识别） */
+  const setItemMapping = useCallback((key: string, rule: ItemMappingRule | undefined) => {
+    setSettings((s) => {
+      const sid = s.activeStrategyId
+      const current = { ...(s.itemMappings?.[sid] ?? {}) }
+      if (rule) current[key] = rule
+      else delete current[key]
+      return { ...s, itemMappings: { ...s.itemMappings, [sid]: current } }
+    })
+  }, [])
 
   /* ---------------- 操作 ---------------- */
 
@@ -244,6 +294,8 @@ export function useStrategy(portfolio: Portfolio) {
     setFlag,
     setCategoryMapping,
     resetMapping,
+    itemMapping,
+    setItemMapping,
     addCustomStrategy,
     updateCustomStrategy,
     removeCustomStrategy,

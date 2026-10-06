@@ -27,7 +27,7 @@ const mem = new Map<string, string>()
   },
 }
 
-const CATEGORY_IDS = ['cat_cash', 'cat_stock', 'cat_fund', 'cat_gold', 'cat_bond', 'cat_debt']
+const CATEGORY_IDS = ['cat_cash', 'cat_stock', 'cat_fund', 'cat_gold', 'cat_bond', 'cat_debt', 'cat_insurance']
 
 /** 用给定 id 拼一份真实结构的组合数据 */
 function portfolioWith(ids: string[]): Portfolio {
@@ -185,5 +185,58 @@ describe('分类标记的健壮性', () => {
     clearPortfolio()
     expect(mem.has(STORAGE_KEY)).toBe(false)
     expect(mem.has(CATEGORY_INTRO_KEY)).toBe(false)
+  })
+})
+
+
+/* ------------------------------------------------------------------ *
+ * 条目字段的持久化：normalizeItem 是「重建对象」，漏字段就会在刷新后丢失
+ * ------------------------------------------------------------------ */
+describe('条目字段在重新加载后必须保留', () => {
+  it('A股/场内市场不会被丢成场外基金（market 白名单要含 ashare）', () => {
+    const pf = portfolioWith(CATEGORY_IDS)
+    const stock = pf.categories.find((c) => c.id === 'cat_stock')!
+    stock.items.push({
+      id: 's1',
+      kind: 'fund',
+      name: '沪深300ETF',
+      code: '510300',
+      market: 'ashare',
+      shares: 100,
+      costNav: 1,
+    })
+    writeStored(pf)
+    const loaded = loadPortfolio().portfolio
+    const item = loaded.categories.find((c) => c.id === 'cat_stock')!.items[0]
+    expect(item.kind).toBe('fund')
+    expect(item.kind === 'fund' ? item.market : undefined).toBe('ashare')
+  })
+
+  it('债券期限与旧的人工资产类型标记都保留', () => {
+    const pf = portfolioWith(CATEGORY_IDS)
+    pf.categories.find((c) => c.id === 'cat_bond')!.items.push({
+      id: 'b1',
+      kind: 'amount',
+      name: '10年期国债',
+      amount: 1000,
+      bondTerm: 'long',
+    })
+    pf.categories.find((c) => c.id === 'cat_fund')!.items.push({
+      id: 'f1',
+      kind: 'fund',
+      name: '某纯债基金',
+      code: '000001',
+      shares: 1,
+      costNav: 1,
+      assetClass: 'bond',
+      bondTerm: 'mid',
+    })
+    writeStored(pf)
+    const loaded = loadPortfolio().portfolio
+    const b = loaded.categories.find((c) => c.id === 'cat_bond')!.items[0]
+    const f = loaded.categories.find((c) => c.id === 'cat_fund')!.items[0]
+    expect(b.bondTerm).toBe('long')
+    expect(f.kind === 'fund' ? f.assetClass : undefined).toBe('bond')
+    expect(f.bondTerm).toBe('mid')
   })
 })

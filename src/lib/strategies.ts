@@ -1,4 +1,4 @@
-import type { MappingEntry, Strategy, StrategyClass, StrategyId } from '../types/strategy'
+import type { AssetSemantic, MappingEntry, Strategy, StrategyClass, StrategyId } from '../types/strategy'
 
 /* ------------------------------------------------------------------ *
  * 内置策略
@@ -17,12 +17,19 @@ export const accentSoftVar = (name: AccentName) => `var(--accent-${name}-soft)`
 /** 默认取色顺序（新增分类时轮换使用） */
 export const CLASS_COLORS: string[] = ACCENT_NAMES.map(accentVar)
 
-const cls = (id: string, name: string, target: number, colorName: AccentName): StrategyClass => ({
+const cls = (
+  id: string,
+  name: string,
+  target: number,
+  colorName: AccentName,
+  semantic?: AssetSemantic,
+): StrategyClass => ({
   id,
   name,
   target,
   color: accentVar(colorName),
   colorName,
+  semantic,
 })
 
 /**
@@ -39,12 +46,12 @@ const ALL_WEATHER: Strategy = {
   kind: 'builtin',
   description: '股票 28.5% / 长期国债 38% / 中期国债 14.25% / 黄金 7.13% / 大宗商品 7.13% / 现金 5%',
   classes: [
-    cls('stock', '股票', 28.5, 'blue'),
-    cls('bond-long', '长期国债', 38, 'green'),
-    cls('bond-mid', '中期国债', 14.25, 'cyan'),
-    cls('gold', '黄金', 7.125, 'gold'),
-    cls('commodity', '大宗商品', 7.125, 'orange'),
-    cls('cash', '现金', 5, 'slate'),
+    cls('stock', '股票', 28.5, 'blue', 'stock'),
+    cls('bond-long', '长期国债', 38, 'green', 'bond-long'),
+    cls('bond-mid', '中期国债', 14.25, 'cyan', 'bond-mid'),
+    cls('gold', '黄金', 7.125, 'gold', 'gold'),
+    cls('commodity', '大宗商品', 7.125, 'orange', 'commodity'),
+    cls('cash', '现金', 5, 'slate', 'cash'),
   ],
 }
 
@@ -56,12 +63,13 @@ const PERMANENT: Strategy = {
   id: 'permanent',
   name: '永久组合（哈利·布朗）',
   kind: 'builtin',
-  description: '股票 25% / 长期国债 25% / 黄金 25% / 现金 25%',
+  // 用户口径：这一类改叫「国债」，长期/中期的国债都并进来（id 保持 bond-long，兼容老数据）
+  description: '股票 25% / 国债 25% / 黄金 25% / 现金 25%',
   classes: [
-    cls('stock', '股票', 25, 'blue'),
-    cls('bond-long', '长期国债', 25, 'green'),
-    cls('gold', '黄金', 25, 'gold'),
-    cls('cash', '现金', 25, 'slate'),
+    cls('stock', '股票', 25, 'blue', 'stock'),
+    cls('bond-long', '国债', 25, 'green', 'bond'),
+    cls('gold', '黄金', 25, 'gold', 'gold'),
+    cls('cash', '现金', 25, 'slate', 'cash'),
   ],
 }
 
@@ -70,8 +78,8 @@ const CLASSIC_60_40: Strategy = {
   id: 'classic-60-40',
   name: '经典 60/40',
   kind: 'builtin',
-  description: '股票 60% / 债券 40%',
-  classes: [cls('stock', '股票', 60, 'blue'), cls('bond', '债券', 40, 'green')],
+  description: '股票 60% / 债券 40%（黄金与现金并入债券）',
+  classes: [cls('stock', '股票', 60, 'blue', 'stock'), cls('bond', '债券', 40, 'green', 'bond')],
 }
 
 export const BUILTIN_STRATEGIES: Strategy[] = [ALL_WEATHER, PERMANENT, CLASSIC_60_40]
@@ -101,12 +109,13 @@ export const DEFAULT_MAPPINGS: Record<StrategyId, Record<string, MappingEntry[]>
   'all-weather': {
     cat_cash: single('cash'),
     cat_stock: single('stock'),
-    // 基金默认当作股票，债券型基金会按名称/用户标记自动归到中期国债
+    // 基金默认当作股票；能穿透到占比的会按占比拆进各桶
     cat_fund: single('stock'),
     cat_gold: single('gold'),
-    // 国债：全天候里对应中期国债（长期国债单独占 40%，储蓄国债更接近中期）
+    // 国债：默认按中期，条目上选了「长期」的会走 bond-long
     cat_bond: single('bond-mid'),
-    cat_debt: single('bond-mid'),
+    // 负债按「负的现金」计入（见 rebalance.ts），这里只是文档化
+    cat_debt: single('cash'),
   },
   permanent: {
     cat_cash: single('cash'),
@@ -116,11 +125,12 @@ export const DEFAULT_MAPPINGS: Record<StrategyId, Record<string, MappingEntry[]>
     cat_bond: single('bond-long'),
     cat_debt: single('bond-long'),
   },
+  // 用户口径：60/40 只有两个桶，黄金与现金都并入债券
   'classic-60-40': {
     cat_cash: single('bond'),
     cat_stock: single('stock'),
     cat_fund: single('stock'),
-    cat_gold: single('stock'),
+    cat_gold: single('bond'),
     cat_bond: single('bond'),
     cat_debt: single('bond'),
   },
@@ -128,9 +138,10 @@ export const DEFAULT_MAPPINGS: Record<StrategyId, Record<string, MappingEntry[]>
 
 /** 自定义分类（用户以后新建的）按名称关键词猜测归属类别 */
 export const CATEGORY_KEYWORD_RULES: Array<{ match: RegExp; classIds: string[] }> = [
-  { match: /(现金|存款|货币|银行|活期|余额宝)/, classIds: ['cash', 'bond', 'bond-mid'] },
+  // 注意别把「数字货币」误判成现金：只认明确的现金/存款字样
+  { match: /(现金|存款|活期|余额宝|货币基金|银行理财)/, classIds: ['cash', 'bond', 'bond-mid'] },
   { match: /(股|权益|指数|ETF)/i, classIds: ['stock'] },
-  { match: /(国债|债券|固收)/, classIds: ['bond', 'bond-long', 'bond-mid'] },
+  { match: /(国债|债券|固收|债)/, classIds: ['bond', 'bond-long', 'bond-mid'] },
   { match: /(黄金|金|贵金属)/, classIds: ['gold'] },
   { match: /(商品|大宗|原油|农产品)/, classIds: ['commodity'] },
   { match: /(房|地产|不动产|车)/, classIds: ['stock', 'commodity'] },

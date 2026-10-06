@@ -212,6 +212,8 @@ export default function ItemForm({
   const [marketPick, setMarketPick] = useState<HoldingMarket | 'auto'>('auto')
 
   /* ---- 定期划扣（仅负债分类显示） ---- */
+  /** 债券期限（长期/中期）：只对债券部分生效，全天候靠它决定落哪一档 */
+  const [bondTerm, setBondTerm] = useState<'long' | 'mid' | ''>(initial?.bondTerm ?? '')
   const [planEnabled, setPlanEnabled] = useState(Boolean(plan))
   const [planName, setPlanName] = useState(plan?.name ?? '')
   // 预填「当前剩余」的三个数字（填两样算第三样，四舍五入）
@@ -473,6 +475,10 @@ export default function ItemForm({
       })
       // 只有用户真正手填过名称时才锁定，否则允许后续同步用接口全称补全
       item.manualName = nameTouched.current && Boolean(name.trim())
+      // 期限与旧的人工资产类型标记不由这个表单编辑，编辑时原样保留（否则保存一次就丢）
+      if (bondTerm) item.bondTerm = bondTerm
+      else if (initial) item.bondTerm = initial.bondTerm
+      if (initial && isFund(item)) item.assetClass = isFund(initial) ? initial.assetClass : undefined
       // 从现金划拨：金额取「份额 × 成本单价」折算后的人民币，作为扣款额
       const costCny = toCny(s * c, HOLDING_MARKET_CURRENCY[item.market ?? 'cn'] ?? 'CNY', rates)
       const deduct = costCny === undefined ? s * c : costCny
@@ -520,16 +526,17 @@ export default function ItemForm({
     }
     if (!Number.isFinite(a)) return setError('请输入有效金额')
     if (a === 0) return setError('金额不能为 0')
-    return finish(
-      makeAmountItem({
-        // 编辑时复用原 id，否则更新会匹配不到目标条目
-        id: initial?.id,
-        name: name.trim() || '未命名',
-        note: note.trim() || undefined,
-        amount: a,
-        currency,
-      }),
-    )
+    const amountItem = makeAmountItem({
+      // 编辑时复用原 id，否则更新会匹配不到目标条目
+      id: initial?.id,
+      name: name.trim() || '未命名',
+      note: note.trim() || undefined,
+      amount: a,
+      currency,
+    })
+    if (bondTerm) amountItem.bondTerm = bondTerm
+    else if (initial?.bondTerm) amountItem.bondTerm = initial.bondTerm
+    return finish(amountItem)
   }
 
   const nameLabel = isFundKind ? '基金名称（可自定义）' : isGoldKind ? '名称' : '名称'
@@ -1008,6 +1015,38 @@ export default function ItemForm({
               </span>
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {/* 债券期限：国债分类、以及任何基金/ETF（如 30 年国债 ETF）都能选 */}
+      {isFundKind || /债|固收/.test(category.name) ? (
+        <div className="rounded-xl border border-line bg-s2 px-3.5 py-3" data-testid="bond-term-section">
+          <div className="flex items-center justify-between">
+            <span className="text-[12.5px] text-ink2">债券期限</span>
+            <div className="flex gap-1">
+              {([
+                ['', '未指定'],
+                ['mid', '中期'],
+                ['long', '长期'],
+              ] as const).map(([value, label]) => (
+                <button
+                  key={value || 'none'}
+                  type="button"
+                  data-testid={`bond-term-${value || 'none'}`}
+                  onClick={() => setBondTerm(value)}
+                  className={`rounded-lg border px-2.5 py-1 text-[11.5px] transition ${
+                    bondTerm === value ? 'border-line-strong bg-s3 text-ink1' : 'border-line bg-s2 text-ink4 hover:bg-s3'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <p className="mt-1.5 text-[11px] leading-relaxed text-ink4">
+            只影响这笔资产里的「债券部分」：全天候把债券拆成长期国债(38%)与中期国债(14.25%)，
+            没指定时默认按中期（30 年国债 ETF 这类请选「长期」）。
+          </p>
         </div>
       ) : null}
 

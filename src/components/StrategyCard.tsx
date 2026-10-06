@@ -219,7 +219,7 @@ export default function StrategyCard({ result, hidden, onOpenSettings }: Strateg
       >
         <span className="inline-flex items-center gap-1.5">
           <Sparkles size={13} className="text-ink4" />
-          {expanded ? '收起再平衡建议' : '查看再平衡建议'}
+          {expanded ? '收起偏离明细' : '查看偏离明细'}
         </span>
         <ChevronDown size={15} className={`text-ink4 transition ${expanded ? 'rotate-180' : ''}`} />
       </button>
@@ -228,25 +228,40 @@ export default function StrategyCard({ result, hidden, onOpenSettings }: Strateg
         <div className="space-y-3 border-t border-line px-4 py-3.5">
           <p className="text-[11.5px] leading-relaxed text-ink4">{result.healthHint}</p>
 
-          {/* 汇总 */}
+          {/* 汇总：只呈现偏差与口径，不给买卖建议 */}
           <div className="grid grid-cols-3 gap-2 rounded-xl border border-line bg-s2 px-3 py-2.5 text-center">
-            <Summary label="需卖出" value={hidden ? '••••' : formatCNY(result.plannedSell, 0)} tone="tone-warn" />
-            <Summary label="需买入" value={hidden ? '••••' : formatCNY(result.plannedBuy, 0)} tone="tone-info" />
             <Summary
-              label="可动用"
-              value={hidden ? '••••' : formatCNY(result.sellCapacity, 0)}
+              label="偏离合计"
+              value={hidden ? '••••' : `${result.totalDeviationPoints.toFixed(1)}%`}
+              tone="text-ink2"
+            />
+            <Summary
+              label="未归类"
+              value={hidden ? '••••' : formatCNY(result.unclassifiedValue, 0)}
+              tone={result.unclassifiedValue > 0 ? 'tone-warn' : 'text-ink2'}
+            />
+            <Summary
+              label="不纳入配置"
+              value={hidden ? '••••' : formatCNY(result.excludedValue, 0)}
               tone="text-ink2"
             />
           </div>
+          {(result.unclassifiedValue > 0 || result.excludedValue > 0) && !hidden ? (
+            <p className="text-[11px] leading-relaxed text-ink4">
+              {result.unclassifiedValue > 0
+                ? `有 ${formatCNY(result.unclassifiedValue, 0)} 元没有归到任何资产类别（没有对应桶），它不计入各桶占比。`
+                : ''}
+              {result.excludedValue > 0
+                ? `另有 ${formatCNY(result.excludedValue, 0)} 元属于非投资资产（自住房/房贷、保险年金、分期划扣），已排除在配置之外。`
+                : ''}
+            </p>
+          ) : null}
 
-          {/* 逐类建议 */}
+          {/* 逐类偏离明细：只呈现「偏差多少、距目标还差多少」，不给买卖建议 */}
           <ul className="space-y-2.5">
             {result.classes.map((c) => {
               const state = stateOf(c)
-              const hasPlan = c.action !== 'hold'
-              const executable = Math.abs(c.adjustAmount) >= 1
-              // 超配但卖不动（如活期存款）：给出手动调整金额
-              const manualSell = hasPlan && !executable ? c.manualAmount : 0
+              const devLabel = `${c.deviationPoints >= 0 ? '+' : ''}${c.deviationPoints.toFixed(1)} 个百分点`
               return (
                 <li
                   key={c.classId}
@@ -262,67 +277,48 @@ export default function StrategyCard({ result, hidden, onOpenSettings }: Strateg
                   <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11.5px]">
                     <Row label="当前市值" value={hidden ? '••••' : `${formatCNY(c.currentValue, 0)} 元`} />
                     <Row label="目标市值" value={hidden ? '••••' : `${formatCNY(c.targetValue, 0)} 元`} />
-                    <Row label="理论缺口" value={hidden ? '••••' : `${formatSigned(c.gapAmount, 0)} 元`} />
+                    <Row label="当前占比" value={hidden ? '••••' : `${(c.actualWeight * 100).toFixed(1)}%`} />
+                    <Row label="目标占比" value={`${(c.targetWeight * 100).toFixed(1)}%`} />
                     <Row
-                      label="建议操作"
-                      value={
-                        executable
-                          ? `${c.adjustAmount > 0 ? '买入' : '卖出'} ${formatCNY(Math.abs(c.adjustAmount), 0)} 元`
-                          : manualSell > 0
-                            ? `手动减仓 ${formatCNY(manualSell, 0)} 元`
-                            : '无需操作'
-                      }
+                      label="偏离"
+                      value={devLabel}
                       tone={
-                        !hasPlan ? 'text-ink4' : c.action === 'buy' ? 'tone-info' : 'tone-warn'
+                        Math.abs(c.deviationPoints) < 0.05
+                          ? 'text-ink4'
+                          : c.deviationPoints > 0
+                            ? 'tone-warn'
+                            : 'tone-info'
                       }
                     />
+                    <Row
+                      label="距目标还差"
+                      value={hidden ? '••••' : `${formatCNY(Math.abs(c.gapAmount), 0)} 元`}
+                      tone="text-ink2"
+                    />
                   </div>
-
-                  {/* 减仓明细 */}
-                  {c.sellCandidates.length > 0 && executable && c.adjustAmount < 0 ? (
-                    <ul className="mt-2 space-y-1 border-t border-line pt-2">
-                      {c.sellCandidates.map((s) => (
-                        <li key={s.itemId} className="flex items-center gap-2 text-[11px]">
-                          <span className="min-w-0 flex-1 truncate text-ink3">
-                            {s.name}
-                            {s.code ? <span className="ml-1 text-ink4">{s.code}</span> : null}
-                          </span>
-                          {s.realizedProfit !== undefined ? (
-                            <span className={`tabular-nums ${s.realizedProfit >= 0 ? 'text-up/80' : 'text-down/80'}`}>
-                              {formatSigned(s.realizedProfit, 0)}
-                            </span>
-                          ) : null}
-                          <span className="w-[76px] text-right tabular-nums tone-warn/90">
-                            卖 {hidden ? '•••' : formatCNY(s.sellAmount, 0)}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
                 </li>
               )
             })}
           </ul>
 
-          {/* 提示 */}
+          {/* 提示：说明口径，不做买卖建议 */}
           {exposedGap > 1 ? (
-            <p className="flex items-start gap-1.5 text-[11px] leading-relaxed tone-warn/90">
+            <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-ink4">
               <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-              有 {formatCNY(exposedGap, 0)} 元的缺口无法靠卖出自动完成（活期存款、房产等无法按比例卖出），
-              需要手动减仓或追加投入才能完全对齐目标。
+              其中 {formatCNY(exposedGap, 0)} 元的偏差来自活期存款 / 房产这类无法按比例调整的资产 —— 调不调、怎么调由你自己决定。
             </p>
           ) : null}
           {result.unclassifiedItemCount > 0 ? (
             <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-ink4">
               <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-              有 {result.unclassifiedItemCount} 只基金无法从名称识别类型（已按分类默认映射处理）。在基金详情里可手动标记为股票型 / 债券型。
+              有 {result.unclassifiedItemCount} 笔资产没有归到任何类别（识别不出来的基金 / 另类资产）。可在「设置 → 投资策略 → 资产映射」里逐笔指定。
             </p>
           ) : null}
           {result.unmappedCategories.length > 0 ? (
             <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-ink4">
               <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-              未映射分类：{result.unmappedCategories.map((c) => c.name).join('、')}
-              {result.unmappedCategories.length > 0 ? '（已在设置里按默认规则兜底）' : ''}
+              未归类分类：{result.unmappedCategories.map((c) => c.name).join('、')}
+              （金额算作「未归类」，不会静默并进别的桶）
             </p>
           ) : null}
           {result.liabilityDeducted > 0 ? (

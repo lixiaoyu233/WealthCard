@@ -5,17 +5,21 @@
  *   用户分类市值 ──映射──> 策略资产类别金额 ──> 实际占比 / 偏离度 / 加减仓金额
  *
  * 关键约定：
- * - 负债类分类的值是负数；默认不进入分配总额的分母（按「可投资资产」算占比），
- *   可在设置里切换为「计入分母」（即按净值算占比），见 StrategySettings.includeLiabilities。
+ * - 映射是**条目级**优先：条目手动规则 > 条目自动识别（穿透占比/形态）> 分类级映射 > 未归类。
+ *   未归类的金额不进任何桶，但要明确列给用户看（unclassifiedValue），绝不静默并进别的桶。
+ * - 负债按「负的现金」计入现金桶（用户口径）；带「房」的条目、保险/年金分类、
+ *   以及由「定期划扣」计划维护的负债条目都不参与配置（excludedValue）。
  * - 阈值单位是「百分点」，偏离度 0.05 就是 5 个百分点。
  */
 
 import type { AssetItem, Category, Portfolio } from '../types/asset'
 import type {
+  AssetMix,
   CategoryAllocation,
   CategoryMapping,
   ClassRebalance,
   HealthLevel,
+  ItemMapping,
   MappingEntry,
   RebalanceAction,
   RebalanceResult,
@@ -24,6 +28,8 @@ import type {
   StrategySettings,
 } from '../types/strategy'
 import { categoryTotal, effectiveFundClass, fundClassToStrategyClasses, isFund, valuate } from './calc'
+import { resolveSemantic, semanticOfClass } from './assetMix'
+import { isExcludedCategory, isExcludedItem, resolveItemMapping } from './itemMapping'
 import type { FxRates } from './currency'
 import {
   CATEGORY_KEYWORD_RULES,
@@ -46,6 +52,7 @@ export function createDefaultSettings(): StrategySettings {
     activeStrategyId: DEFAULT_STRATEGY_ID,
     customStrategies: [],
     mappings: {},
+    itemMappings: {},
     threshold: DEFAULT_THRESHOLD,
     includeLiabilities: false,
     unmappedPolicy: 'auto',
@@ -62,10 +69,6 @@ export function resolveStrategy(settings: StrategySettings): Strategy {
 }
 
 /** 取某策略类别的目标比例（找不到返回 -1，保证不会被选中） */
-function classTarget(strategy: Strategy, classId: string): number {
-  return strategy.classes.find((c) => c.id === classId)?.target ?? -1
-}
-
 /** 该分类是否按负债处理（分类自身标记 或 名称命中负债关键词） */
 export function isLiabilityCategory(category: Category): boolean {
   return category.isLiability === true
@@ -86,9 +89,9 @@ export function defaultMappingFor(strategy: Strategy, category: Category): Mappi
     const hit = keywordHit.classIds.find((id) => classIds.includes(id))
     if (hit) return [{ strategyClassId: hit, percent: 100 }]
   }
-  // 最后兜底：归到占比最大的类别，保证分类不会被静默丢出计算
-  const biggest = [...strategy.classes].sort((a, b) => b.target - a.target)[0]
-  return biggest ? [{ strategyClassId: biggest.id, percent: 100 }] : []
+  // 关键词也认不出来 → 返回空映射，算「未归类」并明确展示给用户。
+  // （以前这里会静默并进占比最大的类别，让金额"消失"在错误的桶里。）
+  return []
 }
 
 /** 把映射里的类别 id 对齐到当前策略（处理策略切换后的失效 id） */
@@ -137,9 +140,15 @@ export function effectiveMapping(
 export interface AllocationInput {
   portfolio: Portfolio
   strategy: Strategy
-  /** 该策略下用户设置过的映射 */
+  /** 该策略下用户设置过的「分类级」映射 */
   mapping?: CategoryMapping
-  /** 负债是否计入分配总额的分母 */
+  /** 用户设置过的「条目级」映射（优先于分类级） */
+  itemMapping?: ItemMapping
+  /** 条目级自动识别（穿透/名称推测）的占比查询 */
+  autoMixOf?: (item: AssetItem) => { mix: AssetMix; origin: 'api' | 'name' } | undefined
+  /** 明确排除的条目 id（例如「定期划扣」计划维护的负债条目） */
+  excludedItemIds?: string[]
+  /** 负债是否计入分配（作为负的现金） */
   includeLiabilities: boolean
   /** 未映射分类的处理方式 */
   unmappedPolicy: 'auto' | 'ignore'
@@ -157,6 +166,10 @@ export interface AllocationResult {
   categories: CategoryAllocation[]
   unmappedCategories: Array<{ id: string; name: string; value: number }>
   unclassifiedItemCount: number
+  /** 未归类的金额（不进任何桶，界面要明确列出来） */
+  unclassifiedValue: number
+  /** 被排除在配置之外的金额（房产 / 保险年金 / 分期划扣） */
+  excludedValue: number
 }
 
 /**
@@ -164,7 +177,17 @@ export interface AllocationResult {
  * 基金持仓会按「资产类型」（名称识别 / 用户标记）细分到股票或债券。
  */
 export function computeAllocations(input: AllocationInput): AllocationResult {
-  const { portfolio, strategy, mapping, includeLiabilities, unmappedPolicy, rates } = input
+  const {
+    portfolio,
+    strategy,
+    mapping,
+    itemMapping,
+    autoMixOf,
+    excludedItemIds,
+    includeLiabilities,
+    unmappedPolicy,
+    rates,
+  } = input
   const byClass: Record<string, number> = {}
   for (const c of strategy.classes) byClass[c.id] = 0
 
@@ -172,84 +195,140 @@ export function computeAllocations(input: AllocationInput): AllocationResult {
   const unmappedCategories: Array<{ id: string; name: string; value: number }> = []
   let liabilityDeducted = 0
   let unclassifiedItemCount = 0
+  let unclassifiedValue = 0
+  let excludedValue = 0
 
-  const classIds = strategy.classes.map((c) => c.id)
+  /** 语义 → 类别 id（同一语义取第一个） */
+  const bySemantic = new Map<string, string>()
+  for (const c of strategy.classes) {
+    const s = semanticOfClass(c)
+    if (s && !bySemantic.has(s)) bySemantic.set(s, c.id)
+  }
+  const hasSemantic = (s: string) => bySemantic.has(s)
+  /**
+   * 「现金」桶：负债按负值记在这里。
+   * 用 resolveSemantic 走兜底 —— 60/40 没有现金桶，现金并进债券，负债就要跟着记成「负债券」。
+   */
+  const cashSemantic = resolveSemantic('cash', strategy, hasSemantic)
+  const cashClassId = cashSemantic ? bySemantic.get(cashSemantic) : undefined
 
   for (const category of portfolio.categories) {
-    const value = categoryTotal(category, rates)
+    const categoryValue = categoryTotal(category, rates)
+
+    // 负债：取负值计入「现金」桶（用户口径）。
+    // 排除项：带「房」的（房贷与自住房**成对排除**，否则配置会莫名偏空）+ 定期划扣维护的条目。
     if (isLiabilityCategory(category)) {
-      // 负债按设置决定是否进入分母；无论哪种口径，都不参与买入/卖出的分配
-      if (includeLiabilities) liabilityDeducted += Math.abs(value)
+      let liability = 0
+      for (const item of category.items) {
+        const value = Math.abs(valuate(item, rates).value)
+        if (value === 0) continue
+        if (excludedItemIds?.includes(item.id) || isExcludedItem(item, category)) {
+          excludedValue += value
+          continue
+        }
+        liability += value
+      }
+      if (liability > 0 && includeLiabilities && cashClassId) {
+        byClass[cashClassId] = (byClass[cashClassId] ?? 0) - liability
+        liabilityDeducted += liability
+      }
       continue
     }
 
-    const entries = effectiveMapping(strategy, category, mapping)
-    if (entries.length === 0 || classIds.length === 0) {
-      if (value !== 0) unmappedCategories.push({ id: category.id, name: category.name, value })
+    // 保险 / 年金 / 名称带「房」的分类：属于非投资资产，不纳入配置
+    if (isExcludedCategory(category)) {
+      excludedValue += Math.abs(categoryValue)
       continue
     }
 
-    const categoryAllocation: CategoryAllocation = {
+    const categoryEntries = effectiveMapping(strategy, category, mapping)
+    const allocation: CategoryAllocation = {
       categoryId: category.id,
       categoryName: category.name,
       categoryColor: category.color,
-      value,
+      value: categoryValue,
       byClass: {},
     }
+    // accounted = 被处理过的条目金额（含"排除"与"未归类"）——
+    // 差额兜底只能用 分类金额 − accounted，否则会把被排除的房产又按分类映射加回来
+    let accountedValue = 0
 
-    // 基金持仓优先按资产类型细分（股票型 -> 股票，债券型 -> 债券）
-    const fundItems = category.items.filter(isFund)
-    const usesFundSplit = fundItems.length > 0
-    let fundHandled = 0
-
-    if (usesFundSplit) {
-      for (const item of fundItems) {
-        const v = valuate(item, rates).value
-        if (v === 0) continue
-        const fundClass = effectiveFundClass(item)
-        if (fundClass === 'unknown') unclassifiedItemCount += 1
-        const targets = fundClassToStrategyClasses(fundClass, classIds)
-        // 识别不出来或策略里没有对应类别 -> 交给下面的默认映射处理
-        if (targets.length === 0) continue
-        // 同一资产类型可能有多个候选（如「长期国债 / 中期国债」），
-        // 取目标比例最大的那个，最贴近策略意图（全天候里债券型基金 -> 中期国债 15%）
-        const chosen = targets.reduce((best, id) => (classTarget(strategy, id) > classTarget(strategy, best) ? id : best), targets[0])
-        byClass[chosen] = (byClass[chosen] ?? 0) + v
-        categoryAllocation.byClass[chosen] = (categoryAllocation.byClass[chosen] ?? 0) + v
-        fundHandled += v
+    for (const item of category.items) {
+      const value = valuate(item, rates).value
+      if (value === 0) continue
+      accountedValue += value
+      const auto = autoMixOf?.(item)
+      const resolved = resolveItemMapping({
+        item,
+        category,
+        strategy,
+        itemMapping,
+        categoryEntries,
+        autoMix: auto?.mix,
+        autoMixOrigin: auto?.origin,
+        excludedItemIds,
+        // 债券期限做在条目上（用户口径：填国债时选长期/中期；债券基金/国债 ETF 同样适用）
+        bondTerm: item.bondTerm,
+      })
+      if (resolved.excluded) {
+        excludedValue += Math.abs(value)
+        continue
       }
-    }
-
-    const remainder = value - fundHandled
-    if (Math.abs(remainder) > 0.005 || !usesFundSplit) {
-      for (const entry of entries) {
-        const part = (remainder * entry.percent) / 100
+      if (resolved.entries.length === 0) {
+        unclassifiedItemCount += 1
+        unclassifiedValue += Math.abs(value)
+        continue
+      }
+      const sum = resolved.entries.reduce((acc, e) => acc + e.percent, 0)
+      if (sum <= 0) {
+        unclassifiedItemCount += 1
+        unclassifiedValue += Math.abs(value)
+        continue
+      }
+      for (const entry of resolved.entries) {
+        const part = (value * entry.percent) / sum
         byClass[entry.strategyClassId] = (byClass[entry.strategyClassId] ?? 0) + part
-        categoryAllocation.byClass[entry.strategyClassId] =
-          (categoryAllocation.byClass[entry.strategyClassId] ?? 0) + part
+        allocation.byClass[entry.strategyClassId] = (allocation.byClass[entry.strategyClassId] ?? 0) + part
+      }
+      // 部分落不进去（例如策略里没有"其他"桶）：这部分明确算作未归类
+      if (resolved.unclassified && resolved.unclassified > 0.0001) {
+        unclassifiedValue += Math.abs(value) * resolved.unclassified
+        unclassifiedItemCount += 1
       }
     }
 
-    categories.push(categoryAllocation)
+    categories.push(allocation)
+    // 分类金额与"条目金额合计"不一致时（理论上不会），差额按分类映射兜底，避免金额凭空消失
+    const remainder = categoryValue - accountedValue
+    if (Math.abs(remainder) > 0.005 && categoryEntries.length > 0) {
+      const total = categoryEntries.reduce((acc, e) => acc + e.percent, 0)
+      if (total > 0) {
+        for (const entry of categoryEntries) {
+          const part = (remainder * entry.percent) / total
+          byClass[entry.strategyClassId] = (byClass[entry.strategyClassId] ?? 0) + part
+          allocation.byClass[entry.strategyClassId] = (allocation.byClass[entry.strategyClassId] ?? 0) + part
+        }
+      }
+    }
+    if (Object.keys(allocation.byClass).length === 0 && categoryValue !== 0) {
+      unmappedCategories.push({ id: category.id, name: category.name, value: categoryValue })
+    }
   }
 
-  // 未映射分类的处理：auto 时按关键词/最大类别兜底，避免金额凭空消失
-  if (unmappedCategories.length > 0 && unmappedPolicy === 'auto' && classIds.length > 0) {
-    for (const item of unmappedCategories) {
-      const pseudo = { ...portfolio.categories.find((c) => c.id === item.id)! }
-      const fallback = defaultMappingFor(strategy, pseudo)
-      if (fallback.length === 0) continue
-      for (const entry of fallback) {
-        const part = (item.value * entry.percent) / 100
-        byClass[entry.strategyClassId] = (byClass[entry.strategyClassId] ?? 0) + part
-      }
-    }
+  // 分母：已归类金额 + （未归类是否计入）
+  const classified = Object.values(byClass).reduce((sum, v) => sum + v, 0)
+  const total = classified + (unmappedPolicy === 'auto' ? unclassifiedValue : 0)
+
+  return {
+    byClass,
+    total,
+    liabilityDeducted,
+    categories,
+    unmappedCategories,
+    unclassifiedItemCount,
+    unclassifiedValue,
+    excludedValue,
   }
-
-  const grossAssets = Object.values(byClass).reduce((sum, v) => sum + v, 0)
-  const total = includeLiabilities ? grossAssets - liabilityDeducted : grossAssets
-
-  return { byClass, total, liabilityDeducted, categories, unmappedCategories, unclassifiedItemCount }
 }
 
 /* ------------------------------------------------------------------ *
@@ -261,6 +340,12 @@ export interface RebalanceOptions {
   includeLiabilities: boolean
   unmappedPolicy: 'auto' | 'ignore'
   mapping?: CategoryMapping
+  /** 条目级映射（优先于分类级） */
+  itemMapping?: ItemMapping
+  /** 条目级自动占比（穿透结果） */
+  autoMixOf?: (item: AssetItem) => { mix: AssetMix; origin: 'api' | 'name' } | undefined
+  /** 明确排除的条目 id（如「定期划扣」计划维护的负债条目） */
+  excludedItemIds?: string[]
   /** 汇率：外币条目按此折算 */
   rates?: FxRates | null
 }
@@ -413,6 +498,8 @@ export function computeRebalance(
     plannedBuy,
     unmappedCategories: allocation.unmappedCategories,
     unclassifiedItemCount: allocation.unclassifiedItemCount,
+    unclassifiedValue: allocation.unclassifiedValue,
+    excludedValue: allocation.excludedValue,
   }
 }
 
@@ -494,10 +581,17 @@ function buildSellCandidatesFor(classId: string, sellable: SellableItem[]): Sell
 }
 
 /** 便捷方法：按当前设置直接算一遍 */
+export interface RebalanceExtras {
+  itemMapping?: ItemMapping
+  autoMixOf?: (item: AssetItem) => { mix: AssetMix; origin: 'api' | 'name' } | undefined
+  excludedItemIds?: string[]
+}
+
 export function rebalanceWithSettings(
   portfolio: Portfolio,
   settings: StrategySettings,
   rates?: FxRates | null,
+  extras: RebalanceExtras = {},
 ): RebalanceResult {
   const strategy = resolveStrategy(settings)
   return computeRebalance(portfolio, strategy, {
@@ -506,6 +600,7 @@ export function rebalanceWithSettings(
     unmappedPolicy: settings.unmappedPolicy,
     mapping: settings.mappings[strategy.id],
     rates,
+    ...extras,
   })
 }
 

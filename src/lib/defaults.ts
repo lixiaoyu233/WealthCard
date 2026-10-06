@@ -5,8 +5,11 @@ export const SCHEMA_VERSION = 2
 
 /**
  * 默认分类（严格对齐产品需求）：
- * 现金与固定资产 / 股票 / 基金 / 黄金 / 负债
+ * 现金与固定资产 / 股票 / 基金 / 黄金 / 国债 / 负债 / 保险与年金
  * color 为主题色，用于图标底色与卡片强调；icon 为 lib/icons.ts 白名单键名。
+ *
+ * 「保险与年金」同时用来安放自住房等**非投资资产**：它与「带房」的条目一样，
+ * 默认不纳入投资策略的配置映射（见 lib/itemMapping.ts 的排除规则）。
  */
 export function createDefaultCategories(): Category[] {
   return [
@@ -68,6 +71,16 @@ export function createDefaultCategories(): Category[] {
       color: accentVar('red'),
       colorName: 'red',
       isLiability: true,
+      items: [],
+    },
+    {
+      id: 'cat_insurance',
+      name: '保险与年金',
+      subtitle: '储蓄险 / 年金 / 自住房（不纳入配置）',
+      icon: 'shield',
+      color: accentVar('cyan'),
+      colorName: 'cyan',
+      defaultKind: 'amount',
       items: [],
     },
   ]

@@ -294,7 +294,7 @@ describe('旧数据兼容（币种字段）', () => {
 describe('新增「国债」分类的升级迁移', () => {
   it('默认分类里国债排在黄金之后、负债之前', () => {
     const ids = createDefaultCategories().map((c) => c.id)
-    expect(ids).toEqual(['cat_cash', 'cat_stock', 'cat_fund', 'cat_gold', 'cat_bond', 'cat_debt'])
+    expect(ids).toEqual(['cat_cash', 'cat_stock', 'cat_fund', 'cat_gold', 'cat_bond', 'cat_debt', 'cat_insurance'])
   })
 
   it('给老数据补上国债，且插入位置正确', () => {
@@ -309,6 +309,7 @@ describe('新增「国债」分类的升级迁移', () => {
       'cat_gold',
       'cat_bond',
       'cat_debt',
+      'cat_insurance',
     ])
   })
 
@@ -351,7 +352,7 @@ describe('新增「国债」分类的升级迁移', () => {
 describe('再平衡把国债纳入计算', () => {
   const aw = BUILTIN_STRATEGIES.find((s) => s.id === 'all-weather')!
 
-  it('国债默认归入中期国债', () => {
+  it('国债：名称带期限按名称，没带期限默认中期', () => {
     const p: Portfolio = {
       version: 2,
       history: [],
@@ -367,9 +368,30 @@ describe('再平衡把国债纳入计算', () => {
       ],
     }
     const r = computeRebalance(p, aw, { threshold: 5, includeLiabilities: false, unmappedPolicy: 'auto' })
-    const mid = r.classes.find((c) => c.classId === 'bond-mid')!
-    expect(mid.currentValue).toBeCloseTo(200_000, 6)
+    // 名称里写了「10年」→ 按长期（久期线索）
+    const long = r.classes.find((c) => c.classId === 'bond-long')!
+    expect(long.currentValue).toBeCloseTo(200_000, 6)
     expect(r.totalForAllocation).toBeCloseTo(200_000, 6)
+  })
+
+  it('国债没写期限时默认中期', () => {
+    const p: Portfolio = {
+      version: 2,
+      history: [],
+      categories: [
+        {
+          id: 'cat_bond',
+          name: '国债',
+          subtitle: '',
+          icon: 'landmark',
+          color: 'var(--accent-cyan)',
+          items: [{ id: 'b1', kind: 'amount', name: '储蓄国债', amount: 200_000 }],
+        },
+      ],
+    }
+    const r = computeRebalance(p, aw, { threshold: 5, includeLiabilities: false, unmappedPolicy: 'auto' })
+    expect(r.classes.find((c) => c.classId === 'bond-mid')!.currentValue).toBeCloseTo(200_000, 6)
+    expect(r.classes.find((c) => c.classId === 'bond-long')!.currentValue).toBeCloseTo(0, 6)
   })
 
   it('外币国债按汇率折算后再参与占比', () => {

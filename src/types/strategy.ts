@@ -13,10 +13,37 @@ export type BuiltinStrategyId = 'all-weather' | 'permanent' | 'classic-60-40'
 /** 策略 id：内置三档 + 用户自定义 */
 export type StrategyId = BuiltinStrategyId | string
 
+/**
+ * 策略类别的「语义」：用于把穿透出来的资产占比（AssetMix）自动落到对应类别上。
+ * 内置策略按 id 推断；用户自定义策略可手改，或用 id/名称自动猜。
+ */
+export type AssetSemantic =
+  | 'stock'
+  | 'bond'
+  | 'bond-long'
+  | 'bond-mid'
+  | 'cash'
+  | 'gold'
+  | 'commodity'
+  | 'other'
+
+export const SEMANTIC_LABEL: Record<AssetSemantic, string> = {
+  stock: '股票',
+  bond: '债券',
+  'bond-long': '长期债券',
+  'bond-mid': '中短期债券',
+  cash: '现金',
+  gold: '黄金',
+  commodity: '大宗商品',
+  other: '其他',
+}
+
 /** 策略资产类别（再平衡的计算维度） */
 export interface StrategyClass {
   id: string
   name: string
+  /** 该类别在「资产语义」上算哪一类；缺省时按 id / 名称推断 */
+  semantic?: AssetSemantic
   /** 目标比例，百分比数值（30 表示 30%），同一策略内合计必须为 100 */
   target: number
   /** 图表用主题色（`var(--accent-*)`） */
@@ -47,6 +74,51 @@ export interface MappingEntry {
 
 /** 分类 id -> 映射条目 */
 export type CategoryMapping = Record<string, MappingEntry[]>
+
+/**
+ * 单个条目的映射规则（优先于分类映射）。
+ *
+ * key 用「标的身份」而不是条目 id：
+ * - 有代码的（基金 / 股票 / ETF）→ `market:code`，这样同标的在多个账户里设置一次即生效，
+ *   条目删掉重建、导出后重新导入、换设备导入 JSON，映射都还在；
+ * - 没有代码的（银行理财、保险、自住房）→ `id:<itemId>`。
+ */
+export type ItemMapping = Record<string, ItemMappingRule>
+
+export interface ItemMappingRule {
+  /** 手动指定的目标桶与占比；留空表示沿用自动识别 */
+  entries?: MappingEntry[]
+  /** 手动锁定的资产占比（穿透结果的手动覆盖） */
+  mix?: AssetMix
+  /** 国债期限：决定全天候里落「长期国债」还是「中期国债」 */
+  bondTerm?: 'long' | 'mid'
+  /** 完全不纳入配置（带「房」、保险/年金等） */
+  excluded?: boolean
+  /** 来源：手动设置 / 自动识别 */
+  source?: 'manual' | 'auto'
+  updatedAt?: number
+}
+
+/** 资产占比向量（和为 1）。六档与三个内置策略的桶一一对应，避免黄金/商品糊在一起 */
+export interface AssetMix {
+  equity: number
+  bond: number
+  money: number
+  gold: number
+  commodity: number
+  other: number
+}
+
+export const MIX_KEYS: Array<keyof AssetMix> = ['equity', 'bond', 'money', 'gold', 'commodity', 'other']
+
+export const MIX_LABEL: Record<keyof AssetMix, string> = {
+  equity: '股票',
+  bond: '债券',
+  money: '现金',
+  gold: '黄金',
+  commodity: '大宗商品',
+  other: '其他',
+}
 
 /** 一个分类在各策略类别上的金额分布（用于展示与建议计算） */
 export interface CategoryAllocation {
@@ -152,6 +224,10 @@ export interface RebalanceResult {
   unmappedCategories: Array<{ id: string; name: string; value: number }>
   /** 缺少行业类型信息的持仓数量 */
   unclassifiedItemCount: number
+  /** 未归类的金额（不进任何桶，界面要单独列出来） */
+  unclassifiedValue: number
+  /** 被排除在配置之外的金额（房产 / 房贷 / 保险年金 / 分期划扣） */
+  excludedValue: number
 }
 
 /** 再平衡设置（持久化） */
@@ -163,6 +239,11 @@ export interface StrategySettings {
   customStrategies: Strategy[]
   /** 用户调整过的映射：策略 id -> 分类 id -> 映射 */
   mappings: Record<string, CategoryMapping>
+  /**
+   * 条目级映射（优先于分类级）：策略 id -> 标的 key -> 规则。
+   * 标的 key：有代码用 `market:code`，没代码用 `id:<itemId>`（见 lib/itemMapping.ts）。
+   */
+  itemMappings: Record<string, ItemMapping>
   /** 触发建议的阈值（百分点，默认 5） */
   threshold: number
   /** 负债类分类的值是否计入分配总额的分母（默认 false，即按「可投资资产」算占比） */

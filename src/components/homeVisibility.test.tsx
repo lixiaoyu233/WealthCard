@@ -39,7 +39,7 @@ describe('首页默认显示什么', () => {
     expect(screen.getByText('成本合计', { exact: false })).toBeTruthy()
     expect(screen.getByText('资产分类')).toBeTruthy()
     expect(screen.getByText('数据管理')).toBeTruthy()
-    expect(screen.queryByText(/再平衡建议/)).toBeNull()
+    expect(screen.queryByText(/偏离明细/)).toBeNull()
     expect(screen.queryByText('走势')).toBeNull()
   })
 
@@ -49,7 +49,7 @@ describe('首页默认显示什么', () => {
       visible: { strategy: true, holdingsProfit: true, trends: false },
     })
     render(<App />)
-    const strategy = screen.getByText(/再平衡建议/)
+    const strategy = screen.getByText(/查看偏离明细/)
     const profit = screen.getByText('持仓总盈亏')
     expect(strategy.compareDocumentPosition(profit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
@@ -60,7 +60,7 @@ describe('首页默认显示什么', () => {
       visible: { strategy: true, holdingsProfit: true, trends: false },
     })
     render(<App />)
-    const strategy = screen.getByText(/再平衡建议/)
+    const strategy = screen.getByText(/查看偏离明细/)
     const profit = screen.getByText('持仓总盈亏')
     expect(profit.compareDocumentPosition(strategy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })

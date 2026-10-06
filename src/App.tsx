@@ -15,11 +15,14 @@ import StrategySettingsSheet from './components/StrategySettingsSheet'
 import SettingsSheet, { type SettingsPage } from './components/SettingsSheet'
 import DividendHomeCard from './components/DividendHomeCard'
 import HoldingImportSheet from './components/HoldingImportSheet'
+import ItemMappingSheet from './components/ItemMappingSheet'
+import { itemKeyOf, mappingSourceLabel, resolveItemMapping } from './lib/itemMapping'
 import { appendHoldings, type ParsedHolding } from './lib/holdingImport'
 import { collectHoldingRefs } from './lib/calc'
 import TrendsPanel from './components/TrendsPanel'
 import Toast, { type ToastMessage, type ToastTone } from './components/Toast'
 import { useStrategy } from './hooks/useStrategy'
+import { useAssetMix } from './hooks/useAssetMix'
 import { useTheme } from './hooks/useTheme'
 import { useSettings } from './hooks/useSettings'
 import { useDividends } from './hooks/useDividends'
@@ -70,8 +73,8 @@ export default function App() {
    */
   const settingsState = useSettings(portfolio, (next) => importPortfolio(next))
 
-  /** 策略与再平衡（纯前端计算，配置单独持久化） */
-  const strategyState = useStrategy(portfolio)
+  /** 穿透取数：中国上市基金/ETF 的资产占比（缓存 7 天），失败自动降级为名称推测 */
+  const assetMix = useAssetMix(portfolio)
 
   /**
    * 分红：A股走东财自动抓取，其余市场手工录入。
@@ -87,6 +90,13 @@ export default function App() {
   const installmentsState = useInstallments(portfolio, (next) => importPortfolio(next))
   /** 扣款账户候选：现金与固定资产下的金额条目（余额不限，可以扣成负数） */
   const depositTargets = useMemo(() => listDepositTargets(portfolio), [portfolio])
+
+  /** 策略与再平衡：把穿透占比与「分期划扣不计入配置」一起喂给计算 */
+  const installmentItemIds = useMemo(() => installmentsState.plans.map((p) => p.itemId), [installmentsState.plans])
+  const strategyState = useStrategy(portfolio, {
+    autoMixOf: assetMix.autoMixOf,
+    excludedItemIds: installmentItemIds,
+  })
 
   /**
    * 总资产月度快照：数据一变就更新当月；每月第一次打开时把上月定稿。
@@ -116,6 +126,8 @@ export default function App() {
   const [settingsPage, setSettingsPage] = useState<SettingsPage | undefined>(undefined)
   /** 批量导入持仓（基金 / 股票分类） */
   const [importOpen, setImportOpen] = useState(false)
+  /** 单笔资产的映射设置目标 */
+  const [mappingTarget, setMappingTarget] = useState<{ item: AssetItem; category: Category } | null>(null)
   const [openCategoryId, setOpenCategoryId] = useState<string | null>(null)
   const [categoryForm, setCategoryForm] = useState<{ open: boolean; initial?: Category | null }>({ open: false })
   const [confirmReset, setConfirmReset] = useState(false)
@@ -251,6 +263,26 @@ export default function App() {
   }, [portfolio.categories])
   /** 已有持仓（代码 + 市场），用于同代码重复检测 */
   const existingHoldings = useMemo(() => collectHoldingRefs(portfolio), [portfolio])
+
+  /** 某笔资产当前按什么算进策略（穿透/名称/分类/未归类） */
+  const mappingLabelOf = useCallback(
+    (item: AssetItem, category: Category) => {
+      const auto = assetMix.autoMixOf(item)
+      const resolved = resolveItemMapping({
+        item,
+        category,
+        strategy: strategyState.strategy,
+        itemMapping: strategyState.itemMapping,
+        categoryEntries: strategyState.mapping[category.id],
+        autoMix: auto?.mix,
+        autoMixOrigin: auto?.origin,
+        excludedItemIds: installmentItemIds,
+        bondTerm: item.bondTerm,
+      })
+      return mappingSourceLabel(resolved)
+    },
+    [assetMix, strategyState.strategy, strategyState.itemMapping, strategyState.mapping, installmentItemIds],
+  )
 
   const handleHoldingImport = (rows: ParsedHolding[]) => {
     const entries = rows.map((h) => {
@@ -599,6 +631,28 @@ export default function App() {
         notify={notify}
       />
 
+      {/* 单笔资产的策略映射 */}
+      <ItemMappingSheet
+        open={!!mappingTarget}
+        onClose={() => setMappingTarget(null)}
+        item={mappingTarget?.item ?? null}
+        category={mappingTarget?.category ?? null}
+        strategy={strategyState.strategy}
+        autoMix={mappingTarget ? assetMix.autoMixOf(mappingTarget.item)?.mix : undefined}
+        mixInfo={mappingTarget ? assetMix.entryOf(mappingTarget.item) : undefined}
+        rule={mappingTarget ? strategyState.itemMapping[itemKeyOf(mappingTarget.item)] : undefined}
+        value={
+          mappingTarget
+            ? valuate(mappingTarget.item, fx.rates).value
+            : undefined
+        }
+        categoryEntries={mappingTarget ? strategyState.mapping[mappingTarget.category.id] : undefined}
+        onSave={(rule) => {
+          if (mappingTarget) strategyState.setItemMapping(itemKeyOf(mappingTarget.item), rule)
+        }}
+        notify={notify}
+      />
+
       {/* 详情面板 */}
       <DetailSheet
         category={openCategory}
@@ -629,6 +683,8 @@ export default function App() {
         fundDefault={settingsState.settings.fund}
         onRememberFunding={settingsState.setFundingSource}
         onOpenImport={() => setImportOpen(true)}
+        mappingLabelOf={mappingLabelOf}
+        onOpenMapping={(item, category) => setMappingTarget({ item, category })}
         onAddFundedItem={(categoryId, item, source, amount) => {
           addFundedItem(categoryId, item, source.categoryId, source.itemId, amount)
           notify(`已从「${source.itemName}」划拨 ${formatCNY(amount, 0)} 元买入`, 'success')
