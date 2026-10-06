@@ -10,7 +10,15 @@ const TEXT = [
   '这一行是废话',
 ].join('\n')
 
-const renderSheet = (opts: { existing?: Array<{ code: string; market?: 'cn' | 'ashare' | 'hk' | 'us' }>; noCategory?: boolean } = {}) => {
+const renderSheet = (
+  opts: {
+    existing?: Array<{ code: string; market?: 'cn' | 'ashare' | 'hk' | 'us' }>
+    noCategory?: boolean
+    /** 打开自动补全（默认关，避免测试联网） */
+    autoEnrich?: boolean
+    enrichImpl?: (h: never, o?: never) => Promise<never>
+  } = {},
+) => {
   const onImport = vi.fn()
   const notify = vi.fn()
   const onClose = vi.fn()
@@ -25,6 +33,8 @@ const renderSheet = (opts: { existing?: Array<{ code: string; market?: 'cn' | 'a
       existing={opts.existing ?? []}
       onImport={onImport}
       notify={notify}
+      autoEnrich={opts.autoEnrich ?? false}
+      enrichImpl={opts.enrichImpl as never}
     />,
   )
   return { onImport, notify, onClose }
@@ -147,5 +157,104 @@ describe('批量导入弹窗', () => {
     parse()
     expect(notify).toHaveBeenCalledWith(expect.stringContaining('解析失败'), 'error')
     expect(screen.queryByTestId('holding-import-row-1')).toBeNull()
+  })
+})
+
+
+describe('金额模式（只有名称 + 金额的截图）', () => {
+  it('预览显示「按金额」标签与金额输入框，导入时只校验金额', () => {
+    const { onImport } = renderSheet()
+    paste('类型=基金 名称=南方纳斯达克100指数发起(QDII)A 金额=10.27')
+    parse()
+    expect(screen.getByTestId('holding-import-row-1').textContent).toContain('按金额')
+    expect((screen.getByTestId('holding-import-amount-1') as HTMLInputElement).value).toBe('10.27')
+    fireEvent.click(screen.getByTestId('holding-import-submit'))
+    expect(onImport).toHaveBeenCalledTimes(1)
+    expect(onImport.mock.calls[0][0][0]).toMatchObject({ mode: 'amount', amount: 10.27, shares: 0 })
+  })
+
+  it('金额改成 0 时拦下并提示', () => {
+    const { onImport, notify } = renderSheet()
+    paste('类型=基金 名称=某某基金 金额=10')
+    parse()
+    fireEvent.change(screen.getByTestId('holding-import-amount-1'), { target: { value: '0' } })
+    fireEvent.click(screen.getByTestId('holding-import-submit'))
+    expect(onImport).not.toHaveBeenCalled()
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining('金额必须大于 0'), 'error')
+  })
+})
+
+
+describe('自动补全（名称 → 代码 → 净值 → 份额）', () => {
+  const enrichStub = (over: Record<string, unknown> = {}) =>
+    async () => ({
+      code: '016452',
+      officialName: '南方纳斯达克100指数发起(QDII)A',
+      ftype: '指数型-海外股票',
+      nav: 1.25,
+      navDate: '2026-10-05',
+      shares: 8.216,
+      costNav: 1.2173,
+      sources: { code: 'name-search', shares: 'derived-nav', cost: 'derived-profit' },
+      candidates: [
+        { code: '016452', name: '南方纳斯达克100指数发起(QDII)A' },
+        { code: '016453', name: '南方纳斯达克100指数发起(QDII)C' },
+      ],
+      notes: ['份额按 2026-10-05 净值 1.25 由市值推算（8.22 份）'],
+      ...over,
+    }) as never
+
+  it('补全结果与来源都显示出来（代码/份额/成本）', async () => {
+    renderSheet({ autoEnrich: true, enrichImpl: enrichStub() })
+    paste('类型=基金 名称=南方纳斯达克100指数发起(QDII)A 金额=10.27 持仓收益=0.27')
+    parse()
+    const box = await screen.findByTestId('holding-import-enriched-1')
+    expect(box.textContent).toContain('016452')
+    expect(box.textContent).toContain('按名称搜到')
+    expect(box.textContent).toContain('由市值推算')
+    expect(box.textContent).toContain('由持仓收益反推')
+    expect(box.textContent).toContain('2026-10-05')
+  })
+
+  it('补全到份额后，导入时从「按金额」升级成持仓（能算盈亏）', async () => {
+    const { onImport } = renderSheet({ autoEnrich: true, enrichImpl: enrichStub() })
+    paste('类型=基金 名称=南方纳斯达克100指数发起(QDII)A 金额=10.27 持仓收益=0.27')
+    parse()
+    await screen.findByTestId('holding-import-enriched-1')
+    fireEvent.click(screen.getByTestId('holding-import-submit'))
+    const row = onImport.mock.calls[0][0][0]
+    expect(row).toMatchObject({
+      mode: 'holding',
+      code: '016452',
+      shares: 8.216,
+      costNav: 1.2173,
+    })
+    expect(onImport.mock.calls[0][0]).toHaveLength(1)
+  })
+
+  it('有多个份额（A/C）时给下拉可以改选', async () => {
+    renderSheet({ autoEnrich: true, enrichImpl: enrichStub() })
+    paste('类型=基金 名称=南方纳斯达克100指数发起 金额=10.27')
+    parse()
+    await screen.findByTestId('holding-import-enriched-1')
+    const select = screen.getByTestId('holding-import-candidate-1') as HTMLSelectElement
+    expect(select.options).toHaveLength(2)
+  })
+
+  it('补全失败（没有代码/份额）时不报错，仍可按金额导入', async () => {
+    const { onImport, notify } = renderSheet({
+      autoEnrich: true,
+      enrichImpl: (async () => ({
+        sources: {},
+        candidates: [],
+        notes: ['没搜到「某某基金」的代码，可手动填或保持按金额记账'],
+      })) as never,
+    })
+    paste('类型=基金 名称=某某基金 金额=10')
+    parse()
+    await screen.findByText(/没搜到/)
+    fireEvent.click(screen.getByTestId('holding-import-submit'))
+    expect(onImport.mock.calls[0][0][0]).toMatchObject({ mode: 'amount', amount: 10 })
+    expect(notify).not.toHaveBeenCalledWith(expect.stringContaining('失败'), 'error')
   })
 })

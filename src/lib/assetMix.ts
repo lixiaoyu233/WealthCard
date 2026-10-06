@@ -76,19 +76,29 @@ export const mixForCash = (): AssetMix => ({ ...ZERO_MIX, money: 1 })
  * 名称兜底（拉不到接口数据时用，界面上会标为「推测」）
  * ------------------------------------------------------------------ */
 
-export function mixFromName(name: string | undefined, market?: string): AssetMix | undefined {
+export function mixFromName(name: string | undefined, _market?: string): AssetMix | undefined {
   const n = (name ?? '').trim()
   if (!n) return undefined
-  // 货币 / 现金管理
-  if (/(货币|现金宝|活期宝|理财金|添益|保证金)/.test(n)) return mixForCash()
-  // 黄金 / 贵金属
-  if (/(黄金|贵金属|白银|金ETF)/.test(n)) return mixForGold()
-  // 其他商品
-  if (/(原油|豆粕|有色|能源化工|商品|饲料|农业期货)/.test(n)) return { ...ZERO_MIX, commodity: 1 }
-  // 可转债 / 债券 / 固收
-  if (/(可转债|转债|债券|纯债|短债|中短债|信用债|利率债|国债|城投债|固收|债基)/.test(n)) {
+  // 货币 / 现金管理（含 Money Market / T-Bill）
+  if (/(货币|现金宝|活期宝|理财金|添益|保证金|money\s*market|t-?bill|cash\s*reserve)/i.test(n)) {
+    return mixForCash()
+  }
+  // 黄金 / 贵金属（含 Gold / Silver / Precious）
+  if (/(黄金|贵金属|白银|金ETF|\bgold\b|\bsilver\b|precious\s*metal)/i.test(n)) return mixForGold()
+  // 其他商品（含 Commodity / Oil / Energy / Mining）
+  if (/(原油|豆粕|有色|能源化工|商品|饲料|农业期货|\bcommodit|\boil\b|\benergy\b|\bmining\b|\bagricultur)/i.test(n)) {
+    return { ...ZERO_MIX, commodity: 1 }
+  }
+  // 可转债 / 债券 / 固收（含 Bond / Treasury / Aggregate / Fixed Income / TIPS / Municipal）
+  if (
+    /(可转债|转债|债券|纯债|短债|中短债|信用债|利率债|国债|城投债|固收|债基|\bbond\b|\btreasur|\baggregate\b|fixed\s*income|\btips\b|municipal|\bcredit\b|\bcorporate\s*bond)/i.test(
+      n,
+    )
+  ) {
     return { ...ZERO_MIX, bond: 1 }
   }
+  // REITs / 不动产 → 其他（三个策略都没有对应桶，界面会明确算「未归类」）
+  if (/(reits?|real\s*estate|不动产)/i.test(n)) return { ...ZERO_MIX, other: 1 }
   // 混合：给一个折中拆分，比整笔算股票更接近事实
   if (/(混合|灵活配置|平衡|稳健|养老目标|绝对收益)/.test(n)) {
     return { ...ZERO_MIX, equity: 0.6, bond: 0.4 }
@@ -101,8 +111,8 @@ export function mixFromName(name: string | undefined, market?: string): AssetMix
   ) {
     return mixForStock()
   }
-  // 美股上市 ETF（无接口数据）默认整笔算股票，用户可手改
-  if (market === 'us' || market === 'hk') return mixForStock()
+  // 认不出名字就返回 undefined：美股/港股「默认整笔算股票」由 shapeMix 负责，
+  // 这样界面上的来源标注才诚实（认出来才叫「名称推测」，否则是「形态」）。
   return undefined
 }
 
@@ -115,6 +125,13 @@ export function inferBondTerm(name: string | undefined): 'long' | 'mid' | undefi
   if (!n) return undefined
   if (/(10年|十年|15年|20年|30年|三十年|长久期|超长期|长债|长期国债|长期纯债)/.test(n)) return 'long'
   if (/(短债|超短|中短|1-3年|0-3年|短期纯债)/.test(n)) return 'mid'
+  // 英文名：20+ Year / Long-Term / 30 Year → 长期；Short-Term / 1-3 Year / Ultra Short → 中期
+  if (/(1[0-9]\s*\+?\s*year|2[0-9]\s*\+?\s*year|3[0-9]\s*\+?\s*year|long[\s-]*term|extended\s*duration)/i.test(n)) {
+    return 'long'
+  }
+  if (/(short[\s-]*term|1-3\s*year|0-3\s*year|ultra[\s-]*short|[1-9]\s*[-–]\s*[1-9]\s*year)/i.test(n)) {
+    return 'mid'
+  }
   return undefined
 }
 

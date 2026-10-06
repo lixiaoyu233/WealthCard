@@ -4,6 +4,7 @@ import { BUILTIN_STRATEGIES } from './strategies'
 import {
   ZERO_MIX,
   mixFromAllocation,
+  inferBondTerm,
   mixFromName,
   mixToEntries,
   normalizeMix,
@@ -101,8 +102,9 @@ describe('mixFromName：拉不到接口数据时的兜底（界面标为「名�
     expect(mix.bond).toBeCloseTo(0.4, 6)
   })
 
-  it('美股/港股上市 ETF（拿不到数据）默认整笔算股票', () => {
-    expect(mixFromName('SPY', 'us')!.equity).toBe(1)
+  it('认不出名字就返回 undefined —— 美股/港股「默认算股票」由形态兜底负责', () => {
+    expect(mixFromName('SPY', 'us')).toBeUndefined()
+    expect(mixFromName('Invesco QQQ Trust', 'us')).toBeUndefined()
   })
 
   it('认不出来的名字 → undefined', () => {
@@ -180,5 +182,32 @@ describe('策略类别的语义完整性', () => {
         expect(semanticOfClass(cls), `${strategy.id} / ${cls.name}`).toBeDefined()
       }
     }
+  })
+})
+
+
+describe('美股/港股 ETF：靠英文名兜底（拿不到资产配置数据）', () => {
+  it('债券类 ETF 不再被一律当成股票', () => {
+    expect(mixFromName('Vanguard Total Bond Market ETF', 'us')!.bond).toBe(1)
+    expect(mixFromName('iShares Core U.S. Aggregate Bond ETF', 'us')!.bond).toBe(1)
+    expect(mixFromName('iShares 20+ Year Treasury Bond ETF', 'us')!.bond).toBe(1)
+    expect(mixFromName('SPDR Bloomberg 1-3 Month T-Bill ETF', 'us')!.money).toBe(1)
+  })
+
+  it('黄金 / 商品 / REITs', () => {
+    expect(mixFromName('SPDR Gold Shares', 'us')!.gold).toBe(1)
+    expect(mixFromName('United States Oil Fund', 'us')!.commodity).toBe(1)
+    expect(mixFromName('Vanguard Real Estate ETF', 'us')!.other).toBe(1)
+  })
+
+  it('股票类 ETF 仍然算股票（QQQ 这种认不出的由形态兜底成股票）', () => {
+    expect(mixFromName('SPDR S&P 500 ETF Trust', 'us')!.equity).toBe(1)
+    expect(mixFromName('Schwab US Dividend Equity ETF', 'us')!.equity).toBe(1)
+  })
+
+  it('英文名也能判久期：20+ 年国债 → 长期，1-3 年 → 中期', () => {
+    expect(inferBondTerm('iShares 20+ Year Treasury Bond ETF')).toBe('long')
+    expect(inferBondTerm('iShares Short-Term Treasury Bond ETF')).toBe('mid')
+    expect(inferBondTerm('Vanguard Total Bond Market ETF')).toBeUndefined()
   })
 })

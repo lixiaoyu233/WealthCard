@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Download, Minus, Plus, RotateCcw, ShieldCheck, TrendingDown, TrendingUp, TriangleAlert } from 'lucide-react'
 import type { AssetItem, Category } from './types/asset'
-import { makeFundItem, usePortfolio } from './hooks/usePortfolio'
+import { makeAmountItem, makeFundItem, usePortfolio } from './hooks/usePortfolio'
 import { isFund, valuate } from './lib/calc'
 import { exportPortfolio } from './lib/storage'
 import { formatCNY, formatRate, formatRelative, formatSigned } from './lib/format'
@@ -287,8 +287,20 @@ export default function App() {
   const handleHoldingImport = (rows: ParsedHolding[]) => {
     const entries = rows.map((h) => {
       const target = h.type === 'fund' ? importTargets.fund : importTargets.stock
+      const categoryId = target?.id ?? ''
+      // 金额模式：平台总览页只有名称 + 金额 → 先按金额记一条（占比/穿透都能算），之后再补份额
+      if (h.mode === 'amount') {
+        return {
+          categoryId,
+          item: makeAmountItem({
+            name: h.name || h.code || '未命名基金',
+            amount: h.amount ?? 0,
+            note: h.note,
+          }),
+        }
+      }
       return {
-        categoryId: target?.id ?? '',
+        categoryId,
         item: makeFundItem({
           name: h.name || h.code,
           code: h.code,

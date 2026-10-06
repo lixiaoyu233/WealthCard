@@ -13,6 +13,7 @@
 import type { AssetItem, Category } from '../types/asset'
 import type { AssetMix, ItemMapping, ItemMappingRule, MappingEntry, Strategy } from '../types/strategy'
 import { isFund } from './calc'
+import { presetOf } from './usEtfPresets'
 import {
   ZERO_MIX,
   inferBondTerm,
@@ -121,8 +122,8 @@ export interface ResolvedItemMapping {
   mix?: AssetMix
   excluded: boolean
   bondTerm?: 'long' | 'mid'
-  /** 该条目自动识别用到的语义来源（穿透 / 形态 / 名称推测） */
-  mixOrigin?: 'api' | 'name' | 'shape' | 'manual'
+  /** 该条目自动识别用到的来源（穿透 / 内置预设 / 名称推测 / 形态 / 手动） */
+  mixOrigin?: 'api' | 'preset' | 'name' | 'shape' | 'manual'
   /** 落不进任何桶的比例（0~1），>0 时界面提示「未归类」 */
   unclassified?: number
 }
@@ -155,8 +156,9 @@ export function resolveItemMapping(input: ResolveItemMappingInput): ResolvedItem
     return { entries: [], source: 'unmapped', excluded: true, bondTerm: rule?.bondTerm ?? input.bondTerm }
   }
 
-  // 期限优先级：条目级规则 > 条目字段 > 名称线索（30年国债ETF 这类）
-  const bondTerm = rule?.bondTerm ?? input.bondTerm ?? inferBondTerm(item.name)
+  // 期限优先级：条目级规则 > 条目字段 > 预设（TLT 等长久期）> 名称线索（30年国债ETF 这类）
+  const bondTerm =
+    rule?.bondTerm ?? input.bondTerm ?? presetOf(isFund(item) ? item.code : undefined, isFund(item) ? item.market : undefined)?.bondTerm ?? inferBondTerm(item.name)
   const opts: MixToEntriesOptions = { bondTerm }
 
   // 2) 条目级手动
@@ -185,10 +187,15 @@ export function resolveItemMapping(input: ResolveItemMappingInput): ResolvedItem
     }
   }
 
-  // 3) 条目级自动识别：穿透占比 > 形态（个股/积存金/分类语义）> 基金名称关键词
+  // 3) 条目级自动识别：穿透占比 > 内置预设 > 名称关键词 > 形态（个股/积存金/分类语义）
+  //    - 穿透：中国上市基金/ETF 的真实资产配置
+  //    - 预设：美股/港股上市的常见 ETF（SPY/BND/GLD/TLT/AOA…）代码精确命中
+  //    - 名称：认得出大类（Bond/Gold/货币…）但拿不到比例
+  //    - 形态：个股=股票、积存金=黄金、按分类语义
+  const preset = isFund(item) ? presetOf(item.code, item.market) : undefined
+  const nameMix = isFund(item) ? mixFromName(item.name, item.market) : undefined
   const shape = shapeMix(item, category)
-  const nameMix = !shape && isFund(item) ? mixFromName(item.name, item.market) : undefined
-  const mix = autoMix ?? shape ?? nameMix
+  const mix = autoMix ?? preset?.mix ?? nameMix ?? shape
   if (mix && !(mix.equity + mix.bond + mix.money + mix.gold + mix.commodity + mix.other <= 0)) {
     const norm = normalizeMix(mix)
     const entries = mixToEntries(norm, strategy, opts)
@@ -199,7 +206,7 @@ export function resolveItemMapping(input: ResolveItemMappingInput): ResolvedItem
       mix: norm,
       excluded: false,
       bondTerm,
-      mixOrigin: autoMix ? (autoMixOrigin ?? 'name') : shape ? 'shape' : 'name',
+      mixOrigin: autoMix ? (autoMixOrigin ?? 'name') : preset ? 'preset' : nameMix ? 'name' : 'shape',
       unclassified: Math.max(0, 1 - placed),
     }
   }
@@ -220,6 +227,7 @@ export function mappingSourceLabel(m: ResolvedItemMapping): string {
   if (m.source === 'category') return '按分类映射'
   if (m.source === 'unmapped') return '未归类'
   if (m.mixOrigin === 'api') return '自动·穿透'
+  if (m.mixOrigin === 'preset') return '自动·内置预设'
   if (m.mixOrigin === 'name') return '自动·名称推测'
   return '自动·形态'
 }

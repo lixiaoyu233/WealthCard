@@ -59,8 +59,12 @@ describe('接口地址与可拉取范围', () => {
 })
 
 describe('解析接口响应', () => {
-  it('基本信息：全称 + 基金类型', () => {
-    expect(parseBasicInformation(BASIC_510300)).toEqual({ name: '沪深300ETF华泰柏瑞', ftype: '指数型-股票' })
+  it('基本信息：全称 + 基金类型 + 单位净值', () => {
+    expect(parseBasicInformation(BASIC_510300)).toMatchObject({
+      name: '沪深300ETF华泰柏瑞',
+      ftype: '指数型-股票',
+      nav: 4.4312,
+    })
     expect(parseBasicInformation({ Datas: null })).toBeUndefined()
     expect(parseBasicInformation(null)).toBeUndefined()
   })

@@ -202,3 +202,63 @@ describe('展示文案与旧数据迁移', () => {
     expect(ruleFromLegacyAssetClass(undefined)).toBeUndefined()
   })
 })
+
+
+describe('美股 ETF 的自动识别：预设/名称优先于「形态一律算股票」', () => {
+  const usFund = (name: string, code: string): AssetItem =>
+    ({ id: 'u1', kind: 'fund', name, code, market: 'us', shares: 100, costNav: 1 }) as AssetItem
+
+  it('BND（总债券市场 ETF）→ 债券桶，来自内置预设', () => {
+    const r = resolveItemMapping({
+      item: usFund('Vanguard Total Bond Market ETF', 'BND'),
+      category: stockCat,
+      strategy: aw,
+      categoryEntries: [{ strategyClassId: 'stock', percent: 100 }],
+    })
+    expect(r.source).toBe('auto')
+    expect(r.mixOrigin).toBe('preset')
+    expect(r.entries).toEqual([{ strategyClassId: 'bond-mid', percent: 100 }])
+  })
+
+  it('表里没有的代码 → 名称关键词', () => {
+    const r = resolveItemMapping({
+      item: usFund('Some Total Bond Market ETF', 'ZZBOND'),
+      category: stockCat,
+      strategy: aw,
+    })
+    expect(r.mixOrigin).toBe('name')
+    expect(r.entries).toEqual([{ strategyClassId: 'bond-mid', percent: 100 }])
+  })
+
+  it('GLD（黄金 ETF）→ 黄金桶', () => {
+    const r = resolveItemMapping({
+      item: usFund('SPDR Gold Shares', 'GLD'),
+      category: stockCat,
+      strategy: aw,
+    })
+    expect(r.entries).toEqual([{ strategyClassId: 'gold', percent: 100 }])
+  })
+
+  it('QQQ 命中内置预设 → 股票', () => {
+    const r = resolveItemMapping({ item: usFund('Invesco QQQ Trust', 'QQQ'), category: stockCat, strategy: aw })
+    expect(r.entries).toEqual([{ strategyClassId: 'stock', percent: 100 }])
+    expect(r.mixOrigin).toBe('preset')
+  })
+
+  it('预设与名称都认不出 → 退回形态（个股仍是股票）', () => {
+    const r = resolveItemMapping({ item: usFund('Invesco ZZZ Trust', 'ZZZZ'), category: stockCat, strategy: aw })
+    expect(r.entries).toEqual([{ strategyClassId: 'stock', percent: 100 }])
+    expect(r.mixOrigin).toBe('shape')
+  })
+
+  it('手动设置永远优先于名称识别', () => {
+    const r = resolveItemMapping({
+      item: usFund('Vanguard Total Bond Market ETF', 'BND'),
+      category: stockCat,
+      strategy: aw,
+      itemMapping: { 'us:BND': { entries: [{ strategyClassId: 'stock', percent: 100 }] } },
+    })
+    expect(r.source).toBe('manual-item')
+    expect(r.entries).toEqual([{ strategyClassId: 'stock', percent: 100 }])
+  })
+})

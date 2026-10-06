@@ -10,6 +10,7 @@ import {
   type ParsedHolding,
 } from '../lib/holdingImport'
 import type { HoldingMarket } from '../lib/usStock'
+import { enrichHolding, type Enrichment, type FundCandidate } from '../lib/fundSearch'
 import { formatCNY } from '../lib/format'
 
 interface HoldingImportSheetProps {
@@ -24,6 +25,10 @@ interface HoldingImportSheetProps {
   /** 导入选中的行（已在组件里应用了就地修改） */
   onImport: (holdings: ParsedHolding[]) => void
   notify: (text: string, tone?: 'success' | 'error' | 'info') => void
+  /** 解析后自动补全代码/份额（测试里可关掉） */
+  autoEnrich?: boolean
+  /** 补全实现（默认走真实接口，测试可注入） */
+  enrichImpl?: typeof enrichHolding
 }
 
 const MARKET_LABEL: Record<HoldingMarket, string> = { cn: '场外基金', ashare: 'A股', hk: '港股', us: '美股' }
@@ -32,6 +37,8 @@ interface Override {
   code?: string
   shares?: string
   cost?: string
+  /** 金额模式（只有市值的截图）下的金额 */
+  amount?: string
 }
 
 /**
@@ -48,12 +55,17 @@ export default function HoldingImportSheet({
   existing,
   onImport,
   notify,
+  autoEnrich = true,
+  enrichImpl = enrichHolding,
 }: HoldingImportSheetProps) {
   const [text, setText] = useState('')
   const [result, setResult] = useState<ImportParseResult | null>(null)
   const [excluded, setExcluded] = useState<Record<number, boolean>>({})
   const [overrides, setOverrides] = useState<Record<number, Override>>({})
   const [importDup, setImportDup] = useState(false)
+  /** 每行补全结果（代码/份额/成本 + 来源 + 候选） */
+  const [enriched, setEnriched] = useState<Record<number, Enrichment>>({})
+  const [enriching, setEnriching] = useState(false)
   const [showPrompt, setShowPrompt] = useState(false)
   const [copied, setCopied] = useState(false)
 
@@ -83,11 +95,41 @@ export default function HoldingImportSheet({
     }
   }
 
+  /** 并行（限流 4）给每行补代码 / 净值 / 份额 */
+  const enrichRows = async (rows: ParsedHolding[], force = false) => {
+    const targets = rows.filter(
+      (h) => force || !h.code || !(h.shares > 0) || h.costNav === undefined,
+    )
+    if (targets.length === 0) return
+    setEnriching(true)
+    const next: Record<number, Enrichment> = {}
+    const LIMIT = 4
+    for (let i = 0; i < targets.length; i += LIMIT) {
+      const batch = targets.slice(i, i + LIMIT)
+      const done = await Promise.all(batch.map(async (h) => ({ line: h.line, e: await enrichImpl(h) })))
+      for (const { line, e } of done) next[line] = e
+    }
+    setEnriched((prev) => ({ ...prev, ...next }))
+    setEnriching(false)
+    const filled = Object.values(next).filter((e) => e.code || e.shares).length
+    if (filled > 0) notify(`已补全 ${filled} 条（代码 / 份额 / 成本，来源都会标出来）`, 'success')
+  }
+
+  /** 让用户从候选里改选份额类别（A/C/I） */
+  const chooseCandidate = async (row: ParsedHolding, candidate: FundCandidate) => {
+    setEnriching(true)
+    const e = await enrichImpl(row, { candidatesOverride: [candidate] })
+    setEnriched((prev) => ({ ...prev, [row.line]: e }))
+    setEnriching(false)
+  }
+
   const runParse = () => {
     const parsed = parseHoldingText(text, { defaultType })
     setResult(parsed)
     setExcluded({})
     setOverrides({})
+    setEnriched({})
+    if (autoEnrich) void enrichRows(parsed.holdings)
     const { ok, warned, failed } = parsed.summary
     if (parsed.holdings.length === 0) {
       notify(failed > 0 ? `解析失败：${failed} 行有问题` : '没解析到任何持仓，检查一下格式', 'error')
@@ -102,14 +144,55 @@ export default function HoldingImportSheet({
     for (const h of selectedRows) {
       const ov = overrides[h.line] ?? {}
       const code = (ov.code ?? h.code).trim()
-      const shares = ov.shares !== undefined ? Number(ov.shares.replace(/[^\d.]/g, '')) : h.shares
+      const e = enriched[h.line]
+      // 金额模式（平台总览页只有名称+金额）：
+      // 补全拿到了份额就升级成「持仓」，否则按金额记账（之后再补）
+      if (h.mode === 'amount') {
+        const amountText = ov.amount ?? String(h.amount ?? '')
+        const amount = Number(amountText.replace(/[^\d.]/g, ''))
+        if (!Number.isFinite(amount) || amount <= 0) {
+          notify(`第 ${h.line} 行：金额必须大于 0`, 'error')
+          return null
+        }
+        const finalCode = code || e?.code || ''
+        if (!(h.name ?? '').trim() && !finalCode) {
+          notify(`第 ${h.line} 行：至少要有一个名称或代码`, 'error')
+          return null
+        }
+        const derivedShares = e?.shares ?? 0
+        if (derivedShares > 0) {
+          out.push({
+            ...h,
+            mode: 'holding',
+            code: finalCode,
+            amount,
+            shares: derivedShares,
+            costNav: e?.costNav,
+            sources: {
+              code: e?.sources.code ?? 'none',
+              shares: e?.sources.shares ?? 'none',
+              cost: e?.sources.cost ?? 'none',
+            },
+          })
+        } else {
+          out.push({ ...h, code: finalCode, amount, shares: 0 })
+        }
+        continue
+      }
+      const shares =
+        ov.shares !== undefined
+          ? Number(ov.shares.replace(/[^\d.]/g, ''))
+          : h.shares > 0
+            ? h.shares
+            : (e?.shares ?? 0)
       const cost =
         ov.cost !== undefined
           ? ov.cost.trim() === ''
             ? undefined
             : Number(ov.cost.replace(/[^\d.]/g, ''))
-          : h.costNav
-      if (!code) {
+          : (h.costNav ?? e?.costNav)
+      const finalCode = code || (e?.code ?? '')
+      if (!finalCode) {
         notify(`第 ${h.line} 行：代码不能为空`, 'error')
         return null
       }
@@ -121,7 +204,7 @@ export default function HoldingImportSheet({
         notify(`第 ${h.line} 行：成本必须是非负数`, 'error')
         return null
       }
-      out.push({ ...h, code, shares, costNav: cost })
+      out.push({ ...h, code: finalCode, shares, costNav: cost, sources: e?.sources ?? h.sources })
     }
     return out
   }
@@ -311,7 +394,7 @@ export default function HoldingImportSheet({
                       />
                       <div className="min-w-0 flex-1">
                         <p className="flex flex-wrap items-center gap-1.5 text-[12px] text-ink1">
-                          <span className="chip">{MARKET_LABEL[h.market]}</span>
+                          <span className="chip">{h.mode === 'amount' ? '按金额' : MARKET_LABEL[h.market]}</span>
                           <span>{h.name || '（名称待补全）'}</span>
                           {dup ? (
                             <span className="chip tone-warn" data-testid={`holding-import-dup-${h.line}`}>
@@ -325,8 +408,22 @@ export default function HoldingImportSheet({
                             data-testid={`holding-import-code-${h.line}`}
                             value={ov.code ?? h.code}
                             onChange={(e) => setOverride(h.line, { code: e.target.value })}
+                            placeholder={h.mode === 'amount' ? '代码（可留空）' : '代码'}
                             className="field-input w-24 py-1 text-[11.5px] tabular-nums"
                           />
+                          {h.mode === 'amount' ? (
+                            <>
+                              <input
+                                data-testid={`holding-import-amount-${h.line}`}
+                                value={ov.amount ?? String(h.amount ?? '')}
+                                onChange={(e) => setOverride(h.line, { amount: e.target.value })}
+                                aria-label="持仓金额"
+                                placeholder="持仓金额"
+                                className="field-input w-24 py-1 text-[11.5px] tabular-nums"
+                              />
+                              <span className="text-[11px] text-ink4">仅按金额记账 · 之后再补份额</span>
+                            </>
+                          ) : null}
                           <input
                             data-testid={`holding-import-shares-${h.line}`}
                             value={ov.shares ?? String(h.shares)}
@@ -339,14 +436,76 @@ export default function HoldingImportSheet({
                             value={ov.cost ?? (h.costNav !== undefined ? String(h.costNav) : '')}
                             onChange={(e) => setOverride(h.line, { cost: e.target.value })}
                             placeholder="成本单价"
-                            className="field-input w-24 py-1 text-[11.5px] tabular-nums"
+                            className={`field-input w-24 py-1 text-[11.5px] tabular-nums ${h.mode === 'amount' ? 'hidden' : ''}`}
                             aria-label="成本单价"
                           />
                           <span className="text-[11px] text-ink4">
-                            市值 ≈{' '}
-                            {formatCNY(h.shares * (h.costNav ?? 0), 2)}
+                            {h.mode === 'amount'
+                              ? '（只有金额，无份额/成本）'
+                              : `市值 ≈ ${formatCNY(h.shares * (h.costNav ?? 0), 2)}`}
                           </span>
                         </div>
+                        {/* 自动补全的结果与来源 */}
+                        {enriched[h.line] ? (
+                          <div className="mt-1 space-y-0.5" data-testid={`holding-import-enriched-${h.line}`}>
+                            {enriched[h.line].code && !h.code ? (
+                              <p className="flex flex-wrap items-center gap-1 text-[11px] text-ink4">
+                                <span>
+                                  代码{' '}
+                                  <span className="tabular-nums text-ink2">{enriched[h.line].code}</span> · 按名称搜到
+                                  {enriched[h.line].officialName ? `（${enriched[h.line].officialName}）` : ''}
+                                </span>
+                                {enriched[h.line].candidates && enriched[h.line].candidates!.length > 1 ? (
+                                  <select
+                                    data-testid={`holding-import-candidate-${h.line}`}
+                                    className="rounded border border-line bg-s2 px-1 py-0.5 text-[11px]"
+                                    value={enriched[h.line].code}
+                                    onChange={(ev) => {
+                                      const picked = enriched[h.line].candidates?.find((c) => c.code === ev.target.value)
+                                      if (picked) void chooseCandidate(h, picked)
+                                    }}
+                                  >
+                                    {enriched[h.line].candidates!.map((c) => (
+                                      <option key={c.code} value={c.code}>
+                                        {c.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ) : null}
+                              </p>
+                            ) : null}
+                            {enriched[h.line].shares && !(h.shares > 0) ? (
+                              <p className="text-[11px] text-ink4">
+                                份额{' '}
+                                <span className="tabular-nums text-ink2">
+                                  {enriched[h.line].shares!.toFixed(2)}
+                                </span>{' '}
+                                · 由市值推算
+                                {enriched[h.line].navDate ? `（净值日期 ${enriched[h.line].navDate}）` : ''}
+                              </p>
+                            ) : null}
+                            {enriched[h.line].costNav !== undefined && h.costNav === undefined ? (
+                              <p className="text-[11px] text-ink4">
+                                成本单价{' '}
+                                <span className="tabular-nums text-ink2">
+                                  {enriched[h.line].costNav!.toFixed(4)}
+                                </span>{' '}
+                                ·{' '}
+                                {enriched[h.line].sources.cost === 'derived-profit'
+                                  ? '由持仓收益反推'
+                                  : '按净值兜底（盈亏按 0）'}
+                              </p>
+                            ) : null}
+                            {enriched[h.line].notes.map((n, i) => (
+                              <p key={i} className="text-[11px] leading-relaxed tone-warn">
+                                {n}
+                              </p>
+                            ))}
+                          </div>
+                        ) : enriching ? (
+                          <p className="mt-1 text-[11px] text-ink4">补全代码 / 份额中…</p>
+                        ) : null}
+
                         {h.issues.length > 0 ? (
                           <ul className="mt-1 space-y-0.5">
                             {h.issues.map((issue, i) => (

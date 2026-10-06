@@ -264,3 +264,53 @@ describe('默认类型（按打开的面板）', () => {
     expect(r.holdings[0]).toMatchObject({ type: 'stock', market: 'ashare' })
   })
 })
+
+
+describe('金额模式：只有名称 + 金额的截图（很多平台总览页）', () => {
+  it('没代码、没份额，只有名称和金额 → 按市值记账，不算错误', () => {
+    const r = parseHoldingText('类型=基金 名称=南方纳斯达克100指数发起(QDII)A 金额=10.27')
+    expect(r.failed).toEqual([])
+    expect(r.holdings[0]).toMatchObject({ mode: 'amount', amount: 10.27, shares: 0, code: '' })
+    expect(r.holdings[0].issues[0].message).toContain('按市值记账')
+  })
+
+  it('有代码 + 金额 + 持仓收益（截图里就有这一列）', () => {
+    const r = parseHoldingText('类型=基金 代码=016452 名称=南方纳斯达克100指数发起(QDII)A 金额=10.27 持仓收益=0.27')
+    expect(r.failed).toEqual([])
+    expect(r.holdings[0]).toMatchObject({ mode: 'amount', code: '016452', amount: 10.27, profit: 0.27 })
+  })
+
+  it('份额 + 金额 + 持仓收益 → 按「金额 − 收益」反推成本单价，并标来源', () => {
+    const r = parseHoldingText('类型=基金 代码=016452 名称=x 份额=8 金额=10.27 持仓收益=0.27')
+    const h = r.holdings[0]
+    expect(h.mode).toBe('holding')
+    expect(h.shares).toBe(8)
+    expect(h.costNav).toBeCloseTo(1.25, 6) // (10.27 − 0.27) / 8
+    expect(h.sources?.cost).toBe('derived-profit')
+    expect(h.issues.some((i) => i.message.includes('反推成本单价'))).toBe(true)
+  })
+
+  it('份额×净值 与金额差太多 → 警告（净值日期不同或份额抄错）', () => {
+    const r = parseHoldingText('类型=基金 代码=161725 份额=100 净值=2 金额=150 成本单价=1')
+    expect(r.holdings[0].issues.some((i) => i.message.includes('请核对'))).toBe(true)
+  })
+
+  it('有份额没成本但给了净值 → 用净值当成本，盈亏按 0（不瞎猜）', () => {
+    const r = parseHoldingText('类型=基金 代码=161725 份额=100 净值=1.2345')
+    expect(r.holdings[0].costNav).toBeCloseTo(1.2345, 6)
+    expect(r.holdings[0].sources?.cost).toBe('fallback-nav')
+  })
+
+  it('什么都没有（只有名称）→ 明确报错，提示可以给金额', () => {
+    const r = parseHoldingText('类型=基金 名称=某某基金')
+    expect(r.holdings).toEqual([])
+    expect(r.failed[0].message).toContain('金额')
+  })
+
+  it('Markdown 表格里的「持仓金额」列也能识别成金额模式', () => {
+    const table = ['| 名称 | 持仓金额 | 持仓收益 |', '| --- | --- | --- |', '| 中欧国证自由现金流指数A | 9.85 | -0.11 |'].join('\n')
+    const r = parseHoldingText(table)
+    expect(r.failed).toEqual([])
+    expect(r.holdings[0]).toMatchObject({ mode: 'amount', amount: 9.85, profit: -0.11 })
+  })
+})

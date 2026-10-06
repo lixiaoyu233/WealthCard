@@ -51,13 +51,24 @@ export type MixCache = Record<string, MixEntry>
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 
-export function parseBasicInformation(json: unknown): { name?: string; ftype?: string } | undefined {
+export interface FundBasicInfo {
+  name?: string
+  ftype?: string
+  /** 单位净值 */
+  nav?: number
+  /** 净值日期 */
+  navDate?: string
+}
+
+export function parseBasicInformation(json: unknown): FundBasicInfo | undefined {
   const data = isRecord(json) ? json.Datas : undefined
   if (!isRecord(data)) return undefined
   const name = typeof data.SHORTNAME === 'string' ? data.SHORTNAME : undefined
   const ftype = typeof data.FTYPE === 'string' ? data.FTYPE : undefined
-  if (!name && !ftype) return undefined
-  return { name, ftype }
+  const nav = Number(data.DWJZ)
+  const navDate = typeof data.FSRQ === 'string' ? data.FSRQ.slice(0, 10) : undefined
+  if (!name && !ftype && !(Number.isFinite(nav) && nav > 0)) return undefined
+  return { name, ftype, nav: Number.isFinite(nav) && nav > 0 ? nav : undefined, navDate }
 }
 
 export function parseAllocationPayload(json: unknown): AllocationRow | undefined {

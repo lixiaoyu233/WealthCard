@@ -22,6 +22,15 @@ export interface ImportIssue {
   message: string
 }
 
+/** 每个数字的出处，界面要如实标出来 */
+export type FieldSource =
+  | 'screenshot' // 截图里就写着
+  | 'name-search' // 用名称搜到的基金代码
+  | 'derived-nav' // 由 金额 ÷ 净值 推算
+  | 'derived-profit' // 由 金额 − 持仓收益 反推
+  | 'fallback-nav' // 没有成本信息，按净值当成本（盈亏按 0）
+  | 'none'
+
 export interface ParsedHolding {
   /** 源文本行号（1 起） */
   line: number
@@ -29,6 +38,17 @@ export interface ParsedHolding {
   market: HoldingMarket
   code: string
   name?: string
+  /**
+   * holding：有份额，按持仓记（能算盈亏）
+   * amount：只有金额（很多平台总览页就是这种）→ 先按金额记账，之后再补份额
+   */
+  mode: 'holding' | 'amount'
+  /** 金额模式下的市值 */
+  amount?: number
+  /** 截图里的持仓收益（用来反推成本） */
+  profit?: number
+  /** 净值日期（截图或接口给的） */
+  navDate?: string
   shares: number
   /** 每份/每股成本（由成本总额换算或直接给出） */
   costNav?: number
@@ -37,6 +57,13 @@ export interface ParsedHolding {
   currency?: CurrencyCode
   note?: string
   issues: ImportIssue[]
+  /** 非空的数字来自哪里（界面据此标注「由市值推算」等） */
+  sources?: {
+    shares?: FieldSource
+    cost?: FieldSource
+    code?: FieldSource
+    codeCandidates?: Array<{ code: string; name: string; ftype?: string }>
+  }
 }
 
 export interface FailedLine {
@@ -75,6 +102,10 @@ const FIELD_ALIASES: Record<string, string> = {
   costtotal: 'costTotal', 买入金额: 'costTotal', 持仓成本: 'costTotal',
   币种: 'currency', currency: 'currency', 货币: 'currency',
   现价: 'price', 最新价: 'price', 净值: 'price', 当前价: 'price', nav: 'price', 单位净值: 'price',
+  金额: 'amount', 市值: 'amount', 持有金额: 'amount', 持仓金额: 'amount', 金额市值: 'amount',
+  value: 'amount', marketvalue: 'amount',
+  持仓收益: 'profit', 浮动盈亏: 'profit', 累计收益: 'profit', 收益: 'profit', profit: 'profit',
+  净值日期: 'navDate', 估值日期: 'navDate', navdate: 'navDate',
   备注: 'note', note: 'note', 账户: 'note', 说明: 'note', remark: 'note',
 }
 
@@ -211,7 +242,6 @@ function parseRow(line: string, lineNo: number, options: ParseOptions): ParsedHo
     rawType ?? (marketHint && marketHint !== 'cn' ? 'stock' : (options.defaultType ?? 'fund'))
 
   const code = (fields.code ?? '').trim()
-  if (!code) return { line: lineNo, text: line, message: '缺少代码' }
 
   let market: HoldingMarket
   if (type === 'fund') {
@@ -230,7 +260,10 @@ function parseRow(line: string, lineNo: number, options: ParseOptions): ParsedHo
     issues.push({ level: 'warning', message: `没写市场，按代码推断为 ${market === 'ashare' ? 'A股' : market === 'hk' ? '港股' : '美股'}` })
   }
 
-  if (!codeValid(code, market)) {
+  if (!code && !fields.amount) {
+    return { line: lineNo, text: line, message: '缺少代码（或提供「金额」按市值记账）' }
+  }
+  if (code && !codeValid(code, market)) {
     return {
       line: lineNo,
       text: line,
@@ -239,35 +272,73 @@ function parseRow(line: string, lineNo: number, options: ParseOptions): ParsedHo
   }
 
   const sharesRaw = fields.shares ? cleanNumber(fields.shares) : {}
-  if (!fields.shares) return { line: lineNo, text: line, message: '缺少份额（份数/股数）' }
-  if (sharesRaw.bad || sharesRaw.value === undefined) {
-    return { line: lineNo, text: line, message: `份额「${fields.shares}」不是有效数字` }
-  }
-  const shares = sharesRaw.value
-  if (!(shares > 0)) return { line: lineNo, text: line, message: '份额必须大于 0' }
-  if (sharesRaw.note) issues.push({ level: 'warning', message: `份额 ${sharesRaw.note}` })
+  const amountRaw = fields.amount ? cleanNumber(fields.amount) : {}
+  const profitRaw = fields.profit ? cleanNumber(fields.profit) : {}
+  const price = fields.price ? cleanNumber(fields.price) : {}
+  if (sharesRaw.bad) return { line: lineNo, text: line, message: `份额「${fields.shares}」不是有效数字` }
+  if (amountRaw.bad) return { line: lineNo, text: line, message: `金额「${fields.amount}」不是有效数字` }
 
-  // 成本：单价优先，其次总额 ÷ 份额；都没有则警告
+  const hasShares = sharesRaw.value !== undefined && sharesRaw.value > 0
+  const amount = amountRaw.value !== undefined ? amountRaw.value : undefined
+  /** 很多平台的总览页只有「名称 + 持仓金额」——这种按金额模式导入，先记账，之后再补份额 */
+  const mode: 'holding' | 'amount' = hasShares ? 'holding' : 'amount'
+  if (!hasShares && amount === undefined) {
+    return {
+      line: lineNo,
+      text: line,
+      message: fields.shares ? '份额必须大于 0' : '缺少份额，或提供「金额」按市值记账',
+    }
+  }
+  if (amount !== undefined && !(amount > 0)) {
+    return { line: lineNo, text: line, message: '金额必须大于 0' }
+  }
+  const shares = hasShares ? sharesRaw.value! : 0
+  if (sharesRaw.note) issues.push({ level: 'warning', message: `份额 ${sharesRaw.note}` })
+  if (mode === 'amount') {
+    issues.push({
+      level: 'warning',
+      message: '这一行只给了金额（按市值记账）：能算占比与策略偏离，但算不了盈亏；之后补上份额即可',
+    })
+  }
+
+  // 成本优先级：截图单价 > 截图总额÷份额 > （金额 − 持仓收益）÷份额 > 净值兜底
   let costNav: number | undefined
+  let costSource: FieldSource = 'none'
   const unit = fields.costNav ? cleanNumber(fields.costNav) : {}
   const total = fields.costTotal ? cleanNumber(fields.costTotal) : {}
+  const profit = profitRaw.value !== undefined ? profitRaw.value : undefined
   if (unit.bad || total.bad) {
     return { line: lineNo, text: line, message: '成本不是有效数字' }
   }
   if (unit.value !== undefined) {
     costNav = unit.value
+    costSource = 'screenshot'
     if (costNav < 0) return { line: lineNo, text: line, message: '成本不能是负数' }
-    if (total.value !== undefined && Math.abs(total.value / shares - costNav) > Math.max(0.01, costNav * 0.02)) {
+    if (total.value !== undefined && shares > 0 && Math.abs(total.value / shares - costNav) > Math.max(0.01, costNav * 0.02)) {
       issues.push({ level: 'warning', message: '同时给了成本单价与成本总额，两者对不上，已按单价处理' })
     }
-  } else if (total.value !== undefined) {
+  } else if (total.value !== undefined && shares > 0) {
     costNav = total.value / shares
+    costSource = 'screenshot'
     issues.push({ level: 'warning', message: `按成本总额 ÷ 份额 换算成单价 ${costNav.toFixed(4)}` })
-  } else {
+  } else if (profit !== undefined && amount !== undefined && shares > 0) {
+    // 成本总额 = 市值 − 持仓收益（用户的截图里就有这一列）
+    const costTotal = amount - profit
+    costNav = costTotal / shares
+    costSource = 'derived-profit'
+    issues.push({
+      level: 'warning',
+      message: `没有成本，按「市值 ${amount} − 持仓收益 ${profit} = ${costTotal.toFixed(2)}」反推成本单价 ${costNav.toFixed(4)}`,
+    })
+  } else if (mode === 'holding' && price.value !== undefined) {
+    // 有净值没成本：把净值当成本 → 盈亏显示 0，比乱猜诚实
+    costNav = price.value
+    costSource = 'fallback-nav'
+    issues.push({ level: 'warning', message: '没有成本信息，已按当前净值当成本（盈亏按 0 显示）' })
+  } else if (mode === 'holding') {
     issues.push({ level: 'warning', message: '没给成本，导入后浮盈会失真，建议补上' })
   }
 
-  const price = fields.price ? cleanNumber(fields.price) : {}
   if (price.bad) issues.push({ level: 'warning', message: `现价「${fields.price}」不是有效数字，已忽略` })
 
   let currency: CurrencyCode | undefined
@@ -282,18 +353,35 @@ function parseRow(line: string, lineNo: number, options: ParseOptions): ParsedHo
     }
   }
 
+  // 份额×净值 与 金额 明显对不上时提醒（净值日期不同 / 份额抄错）
+  if (mode === 'holding' && amount !== undefined && price.value !== undefined && price.value > 0) {
+    const est = shares * price.value
+    if (Math.abs(est - amount) / amount > 0.02) {
+      issues.push({ level: 'warning', message: `份额 × 净值 = ${est.toFixed(2)}，与金额 ${amount} 差 ${(Math.abs(est - amount) / amount * 100).toFixed(1)}%，请核对` })
+    }
+  }
+
   return {
     line: lineNo,
     type,
     market,
     code,
     name: fields.name?.trim() || undefined,
+    mode,
+    amount,
+    profit,
+    navDate: fields.navDate?.trim() || undefined,
     shares,
     costNav,
     price: price.value !== undefined && !price.bad ? price.value : undefined,
     currency,
     note: fields.note?.trim() || undefined,
     issues,
+    sources: {
+      shares: hasShares ? 'screenshot' : 'none',
+      cost: costSource,
+      code: code ? 'screenshot' : 'none',
+    },
   }
 }
 
@@ -312,7 +400,10 @@ export function markdownTableToLines(lines: string[]): { lines: string[]; used: 
       .split('|')
       .map((c) => c.trim())
   const header = cells(rows[0])
-  if (!header.some((h) => canonicalKey(h) === 'code')) return null
+  // 表头至少要有 2 个能认出来的字段才算表格（不再强制必须有「代码」列 ——
+  // 平台总览页常常只有 名称 / 持仓金额 / 持仓收益）
+  const recognized = header.filter((h) => canonicalKey(h)).length
+  if (recognized < 2) return null
   const out: string[] = []
   for (const row of rows.slice(1)) {
     if (/^[\s|:-]+$/.test(row)) continue // |---|---|
@@ -372,16 +463,20 @@ export function parseHoldingText(text: string, options: ParseOptions = {}): Impo
 /** 一键复制给别的 AI 的提示词（与 docs/持仓导入提示词.md 同源） */
 export const HOLDING_IMPORT_PROMPT = `你是持仓截图识别助手。请把截图里的基金/股票持仓，按下面格式输出成一段纯文本，不要输出 JSON、不要输出表格。
 
-【必需信息】每个标的都要能看到：名称或代码、持有份额、成本（成本单价或成本总额）。
-如果截图里缺哪一项，就在末尾用一行「# 缺少：<标的> 的 <字段>（截图中看不到 <原因>）」说明，不要猜测、不要编造数字。
+【必需信息】每个标的至少要有：名称或代码 + 金额（持仓金额 / 市值）。
+份额、成本、持仓收益、净值这些，截图里看得到就写，看不到就不要写 —— 绝对不要推算、不要用「市值 − 收益」之类反推、不要编造数字。
+如果连金额都看不到，就在末尾用一行「# 缺少：<标的> 的 <字段>（截图中看不到 <原因>）」说明。
 
 【单位】如果截图按「手」显示，请先换算成股（1 手 = 100 股），并在末尾写一行「# 换算：<标的> X 手 → Y 股」。
 份额要填份数/股数，不要填金额。
 
 【格式】一行一个标的，字段写成 键=值，用空格隔开：
-类型=基金|股票 市场=A股|港股|美股 代码= 名称= 份额= 成本单价= 成本总额= 币种= 现价= 备注=
+类型=基金|股票 市场=A股|港股|美股 代码= 名称= 金额= 份额= 成本单价= 成本总额= 持仓收益= 净值= 净值日期= 币种= 备注=
 
-- 类型=基金：场外基金，6 位数字代码，市场可省略；类型=股票：必须写市场
+- 类型=基金：场外基金，代码是 6 位数字；类型=股票：必须写市场
+- 金额 = 当前市值 / 持仓金额（平台总览页通常只有这个，有它就够）
+- 持仓收益 = 截图里的「持仓收益 / 浮动盈亏 / 累计收益」原文数字
+- 净值 = 截图里的「单位净值 / 最新净值」；净值日期 = 对应的日期
 - 成本单价 与 成本总额 只写你更确定的那个，不要把一个数字同时写成两个
 - 币种：港股 HKD、美股 USD、A股与基金 CNY；不确定可省略
 - 金额可带千分位与货币符号（1,234.56 / ¥1234.56 / $520）
@@ -393,11 +488,12 @@ export const HOLDING_IMPORT_PROMPT = `你是持仓截图识别助手。请把截
 # 存疑：<哪一条的哪个字段看不清或可能看错>
 
 【示例】
-类型=基金 代码=161725 名称=招商中证白酒 份额=12000 成本单价=1.2345 备注=支付宝
-类型=股票 市场=A股 代码=600519 名称=贵州茅台 份额=100 成本总额=150000
-类型=股票 市场=美股 代码=SPY 名称=标普500ETF 份额=10 成本单价=520 币种=USD
-# 校验：共 3 条，字段完整 3 条
-# 存疑：无`
+类型=基金 名称=南方纳斯达克100指数发起(QDII)A 金额=10.27 持仓收益=0.27
+类型=基金 代码=161725 名称=招商中证白酒指数(LOF)A 金额=12000 份额=22641.51 成本单价=0.492
+类型=股票 市场=A股 代码=600519 名称=贵州茅台 金额=125800 份额=100 成本总额=150000
+# 校验：共 3 条，字段完整 2 条
+# 存疑：南方纳斯达克100 没有份额，导入后由 App 按净值推算
+`
 
 /**
  * 把导入的条目追加到组合里（一次性写回，避免逐条写 N 次）。
