@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ArrowLeft, ArrowDown, ArrowUp, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { ArrowLeft, ArrowDown, ArrowUp, Pencil, Plus, RefreshCw, Trash2, Upload } from 'lucide-react'
 import type { AssetItem, Category, HistoryPoint } from '../types/asset'
 import type { FxRates } from '../lib/currency'
 import type { CashCandidate, FundingSource } from '../lib/settings'
@@ -41,6 +41,8 @@ interface DetailSheetProps {
   onMoveCategory: (id: string, dir: -1 | 1) => void
   onRefresh: () => void
   onEditCategory: (category: Category) => void
+  /** 打开「批量导入持仓」（基金/股票分类才有） */
+  onOpenImport?: () => void
   /** 定期划扣计划（按条目查） */
   plans?: InstallmentPlan[]
   /** 扣款账户候选（现金与固定资产，余额不限，可扣成负数） */
@@ -75,6 +77,7 @@ export default function DetailSheet({
   onRemoveCategory,
   onMoveCategory,
   onRefresh,
+  onOpenImport,
   plans,
   depositTargets,
   onSavePlan,
@@ -231,6 +234,19 @@ export default function DetailSheet({
                 ))}
               </ul>
             )}
+
+            {/* 批量导入：粘贴别的 AI 识别截图后的文字 */}
+            {onOpenImport &&
+            (category.defaultKind === 'fund' || category.items.some(isFund) || /基金|股票/.test(category.name)) ? (
+              <button
+                type="button"
+                data-testid="open-holding-import"
+                className="btn-ghost w-full py-2.5 text-[12.5px]"
+                onClick={onOpenImport}
+              >
+                <Upload size={14} /> 批量导入（粘贴 AI 识别的文字）
+              </button>
+            ) : null}
 
             {/* 分类级操作 */}
             <div className="flex items-center justify-between rounded-2xl border border-line px-3.5 py-3">

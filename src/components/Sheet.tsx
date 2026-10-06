@@ -13,6 +13,11 @@ interface SheetProps {
   /** 标题左侧自定义节点（如分类图标） */
   leading?: ReactNode
   maxWidth?: string
+  /**
+   * 叠层用的层级类。默认 z-50；在已有弹窗之上再开一个时（例如分类详情 → 批量导入），
+   * 传更高的值（z-[60]）才能盖在上面。
+   */
+  zClassName?: string
 }
 
 /**
@@ -28,6 +33,7 @@ export default function Sheet({
   footer,
   leading,
   maxWidth = 'max-w-[480px]',
+  zClassName = 'z-50',
 }: SheetProps) {
   const panelRef = useRef<HTMLDivElement>(null)
 
@@ -56,7 +62,7 @@ export default function Sheet({
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" role="dialog" aria-modal="true">
+    <div className={`fixed inset-0 ${zClassName} flex items-end justify-center sm:items-center`} role="dialog" aria-modal="true">
       <button
         type="button"
         aria-label="关闭"

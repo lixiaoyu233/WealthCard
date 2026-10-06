@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Download, Minus, Plus, RotateCcw, ShieldCheck, TrendingDown, TrendingUp, TriangleAlert } from 'lucide-react'
 import type { AssetItem, Category } from './types/asset'
-import { usePortfolio } from './hooks/usePortfolio'
+import { makeFundItem, usePortfolio } from './hooks/usePortfolio'
 import { isFund, valuate } from './lib/calc'
 import { exportPortfolio } from './lib/storage'
 import { formatCNY, formatRate, formatRelative, formatSigned } from './lib/format'
@@ -14,6 +14,9 @@ import StrategyCard from './components/StrategyCard'
 import StrategySettingsSheet from './components/StrategySettingsSheet'
 import SettingsSheet, { type SettingsPage } from './components/SettingsSheet'
 import DividendHomeCard from './components/DividendHomeCard'
+import HoldingImportSheet from './components/HoldingImportSheet'
+import { appendHoldings, type ParsedHolding } from './lib/holdingImport'
+import { collectHoldingRefs } from './lib/calc'
 import TrendsPanel from './components/TrendsPanel'
 import Toast, { type ToastMessage, type ToastTone } from './components/Toast'
 import { useStrategy } from './hooks/useStrategy'
@@ -111,6 +114,8 @@ export default function App() {
   const [settingsSheetOpen, setSettingsSheetOpen] = useState(false)
   /** 首页区块的「查看全部」可以直接落在设置里的某一页 */
   const [settingsPage, setSettingsPage] = useState<SettingsPage | undefined>(undefined)
+  /** 批量导入持仓（基金 / 股票分类） */
+  const [importOpen, setImportOpen] = useState(false)
   const [openCategoryId, setOpenCategoryId] = useState<string | null>(null)
   const [categoryForm, setCategoryForm] = useState<{ open: boolean; initial?: Category | null }>({ open: false })
   const [confirmReset, setConfirmReset] = useState(false)
@@ -234,6 +239,43 @@ export default function App() {
       }
     }
     reader.readAsText(file)
+  }
+
+  /** 批量导入的落点：基金 → 基金分类，股票 → 股票分类 */
+  const importTargets = useMemo(() => {
+    const fund = portfolio.categories.find(
+      (c) => c.id === 'cat_fund' || (/基金/.test(c.name) && !/股票/.test(c.name)),
+    )
+    const stock = portfolio.categories.find((c) => c.id === 'cat_stock' || /股票/.test(c.name))
+    return { fund, stock }
+  }, [portfolio.categories])
+  /** 已有持仓（代码 + 市场），用于同代码重复检测 */
+  const existingHoldings = useMemo(() => collectHoldingRefs(portfolio), [portfolio])
+
+  const handleHoldingImport = (rows: ParsedHolding[]) => {
+    const entries = rows.map((h) => {
+      const target = h.type === 'fund' ? importTargets.fund : importTargets.stock
+      return {
+        categoryId: target?.id ?? '',
+        item: makeFundItem({
+          name: h.name || h.code,
+          code: h.code,
+          market: h.market,
+          shares: h.shares,
+          costNav: h.costNav ?? 0,
+          manualNav: h.price,
+          note: h.note,
+        }),
+      }
+    })
+    const res = appendHoldings(portfolio, entries)
+    if (res.added === 0) {
+      notify('没有可导入的条目：目标分类不存在（先建一个「基金」或「股票」分类）', 'error')
+      return
+    }
+    importPortfolio(res.portfolio)
+    notify(`已导入 ${res.added} 条持仓${res.skipped > 0 ? `，${res.skipped} 条缺分类已跳过` : ''}`, 'success')
+    setImportOpen(false)
   }
 
   const handleAddItem = (categoryId: string, item: AssetItem) => {
@@ -543,6 +585,20 @@ export default function App() {
         </div>
       </div>
 
+      {/* 批量导入持仓（基金 / 股票） */}
+      <HoldingImportSheet
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        defaultType={openCategory && /股票/.test(openCategory.name) ? 'stock' : 'fund'}
+        targetCategory={(type) => {
+          const target = type === 'fund' ? importTargets.fund : importTargets.stock
+          return target ? { id: target.id, name: target.name } : undefined
+        }}
+        existing={existingHoldings}
+        onImport={handleHoldingImport}
+        notify={notify}
+      />
+
       {/* 详情面板 */}
       <DetailSheet
         category={openCategory}
@@ -572,6 +628,7 @@ export default function App() {
         dueCount={installmentsState.dueCount}
         fundDefault={settingsState.settings.fund}
         onRememberFunding={settingsState.setFundingSource}
+        onOpenImport={() => setImportOpen(true)}
         onAddFundedItem={(categoryId, item, source, amount) => {
           addFundedItem(categoryId, item, source.categoryId, source.itemId, amount)
           notify(`已从「${source.itemName}」划拨 ${formatCNY(amount, 0)} 元买入`, 'success')
