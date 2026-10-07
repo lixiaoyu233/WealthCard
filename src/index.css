@@ -248,6 +248,24 @@
     background-color: var(--s2);
   }
 
+  /* 可点击的小药丸：和 .chip 同尺寸，补上 hover / 按压 / 禁用态 */
+  .chip-button {
+    @apply chip transition hover:border-line-strong hover:text-ink1 active:scale-95
+      disabled:pointer-events-none disabled:opacity-60;
+  }
+
+  /* 顶部缓存提示里的「点此更新」：品牌金浅底，视觉上比普通 chip 更"可点" */
+  .chip-update {
+    @apply inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium text-ink1
+      transition active:scale-95 disabled:pointer-events-none disabled:opacity-60;
+    border-color: color-mix(in srgb, var(--accent-gold) 34%, transparent);
+    background-color: var(--accent-gold-soft);
+  }
+
+  .chip-update:hover {
+    border-color: color-mix(in srgb, var(--accent-gold) 62%, transparent);
+  }
+
   /* 语义色文本：白天主题会自动换成深色版 */
   .tone-up {
     color: var(--up);

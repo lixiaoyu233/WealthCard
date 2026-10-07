@@ -10,6 +10,7 @@
  * 保证纯前端、离线也能用上次的汇率继续算。
  */
 
+import { fxFallbackRates } from './fxFallback'
 import {
   CURRENCY_CODES,
   CURRENCY_STORAGE_KEY,
@@ -28,6 +29,8 @@ export interface FxResult {
   fromNetwork: boolean
   /** 网络失败时的原因，便于界面提示 */
   error?: string
+  /** 是否用的内置参考汇率（实时失败且无缓存） */
+  builtin?: boolean
 }
 
 /* ------------------------------------------------------------------ *
@@ -156,9 +159,7 @@ export async function fetchRates(options: FetchFxOptions = {}): Promise<FxResult
   if (hasUsableRates(cached)) {
     return { rates: cached as FxRates, fromNetwork: false, error }
   }
-  return {
-    rates: { perCny: { CNY: 1 }, fetchedAt: 0, source: 'none' },
-    fromNetwork: false,
-    error,
-  }
+  // 最后一级兜底：内置参考汇率（首次打开就没网 / 清过数据时用）
+  // 至少给出数量级正确的总额，而不是把美元当人民币；界面会标明日期并提示联网后更新。
+  return { rates: fxFallbackRates(), fromNetwork: false, error, builtin: true }
 }

@@ -21,6 +21,7 @@ import { appendHoldings, mergeHoldingsInto, type ParsedHolding } from './lib/hol
 import TrendsPanel from './components/TrendsPanel'
 import Toast, { type ToastMessage, type ToastTone } from './components/Toast'
 import { useStrategy } from './hooks/useStrategy'
+import { useServiceWorker } from './hooks/useServiceWorker'
 import { useAssetMix } from './hooks/useAssetMix'
 import { useTheme } from './hooks/useTheme'
 import { useSettings } from './hooks/useSettings'
@@ -96,6 +97,8 @@ export default function App() {
     autoMixOf: assetMix.autoMixOf,
     excludedItemIds: installmentItemIds,
   })
+  /** Service Worker：缓存版本 / 新版本提示（开发环境不注册，返回 undefined） */
+  const swStatus = useServiceWorker()
 
   /**
    * 总资产月度快照：数据一变就更新当月；每月第一次打开时把上月定稿。
@@ -516,6 +519,7 @@ export default function App() {
         ) : null}
 
         <Header
+          swStatus={swStatus}
           summary={summary}
           history={portfolio.history}
           syncing={sync.loading}
@@ -537,6 +541,8 @@ export default function App() {
             loading: fx.loading,
             stale: fx.stale,
             sourceLabel: fx.sourceLabel,
+            cacheTime: fx.cacheTime,
+            builtin: fx.builtin,
             currencies: exposure.byCurrency.map((b) => b.currency),
           }}
         />

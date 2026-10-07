@@ -3,8 +3,12 @@ import type { HistoryPoint } from '../types/asset'
 import type { Summary } from '../types/asset'
 import { formatCNY, formatCompactCNY, formatRelative, formatSigned } from '../lib/format'
 import { MODE_LABEL, type ThemeMode } from '../hooks/useTheme'
+import type { SwStatus } from '../hooks/useServiceWorker'
+import SwNotice from './SwNotice'
 
 interface HeaderProps {
+  /** 缓存版本 / 新版本提示（未注册 SW 时为 undefined，界面不显示） */
+  swStatus?: SwStatus
   summary: Summary
   history: HistoryPoint[]
   syncing: boolean
@@ -28,7 +32,12 @@ interface HeaderProps {
     hasForeign: boolean
     loading: boolean
     stale: boolean
+    /** 「来源 · 缓存于 时间」 */
     sourceLabel: string
+    /** 仅缓存时间（过期提示里用） */
+    cacheTime?: string
+    /** 是否用的内置参考汇率（实时与缓存都拿不到时的兜底） */
+    builtin?: boolean
     currencies: string[]
   }
 }
@@ -46,6 +55,7 @@ const STATUS_DOT: Record<'healthy' | 'watch' | 'warning' | 'critical', string> =
  * 「资产卡包」标题 → 「净资产 CNY」标签 → 大字号总额 → 变化提示 / 同步状态。
  */
 export default function Header({
+  swStatus,
   summary,
   history,
   syncing,
@@ -169,7 +179,15 @@ export default function Header({
             外币资产（{fx.currencies.join(' / ')}）按实时汇率折算
             {fx.loading ? ' · 更新中…' : ` · ${fx.sourceLabel}`}
           </span>
-          {fx.stale && !fx.loading ? <span className="tone-warn">汇率可能过期，点右上角刷新</span> : null}
+          {fx.builtin ? (
+            <span className="tone-warn">
+              ⚠ 内置参考汇率（{fx.sourceLabel.replace('内置参考汇率 · ', '')}），联网后自动更新
+            </span>
+          ) : fx.stale && !fx.loading ? (
+            <span className="tone-warn">
+              汇率缓存{fx.cacheTime ? `（${fx.cacheTime}）` : ''}已超过 24 小时，点右上角刷新
+            </span>
+          ) : null}
         </p>
       ) : null}
 
@@ -184,6 +202,9 @@ export default function Header({
           <span className="text-ink4">本地数据 · 仅保存在此浏览器</span>
         )}
       </div>
+
+      {/* 缓存版本 / 新版本提示：紧跟在「本地数据 · 仅保存在此浏览器」下面 */}
+      {swStatus ? <SwNotice {...swStatus} /> : null}
     </header>
   )
 }

@@ -9,6 +9,7 @@ import type {
   Portfolio,
 } from '../types/asset'
 import { CATEGORY_COLORS, SCHEMA_VERSION, createDefaultCategories } from '../lib/defaults'
+import { FX_FALLBACK_AS_OF, isBuiltinRates } from '../lib/fxFallback'
 import {
   collectCurrencies,
   collectFundCodes,
@@ -420,7 +421,14 @@ export function usePortfolio() {
       error: fxError,
       hasForeign,
       currencies: foreignCurrencies,
-      sourceLabel: hasUsableRates(rates) ? describeRates(rates) : '暂无汇率',
+      // 内置兜底要明确写出来，绝不冒充实时；实时/缓存则标「来源 · 缓存于 时间」
+      builtin: isBuiltinRates(rates),
+      sourceLabel: !hasUsableRates(rates)
+        ? '暂无汇率'
+        : isBuiltinRates(rates)
+          ? `内置参考汇率 · ${FX_FALLBACK_AS_OF}`
+          : `${rates?.source ?? '未知来源'} · 缓存于 ${describeRates(rates)}`,
+      cacheTime: describeRates(rates),
       sync: syncFx,
     },
     sync,
